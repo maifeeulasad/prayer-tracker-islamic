@@ -20,3 +20,14 @@ enum class PrayerCategory(val displayName: String, val arabicName: String) {
     WITR("Witr", "وتر"),
     NAFL("Nafl", "نفل")
 }
+
+/**
+ * Represents a single prayer unit that can be tracked.
+ */
+data class PrayerUnit(
+    val id: String,
+    val prayerType: PrayerType,
+    val category: PrayerCategory,
+    val rakatNumber: Int,
+    val displayName: String
+)
