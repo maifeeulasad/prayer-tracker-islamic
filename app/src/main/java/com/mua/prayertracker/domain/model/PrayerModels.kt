@@ -70,3 +70,14 @@ enum class DayCompletionStatus {
     MISSED,      // Fard prayers missed
     COMPLETE     // All Fard prayers completed
 }
+
+/**
+ * Represents a single day in the calendar with its completion status.
+ */
+data class CalendarDay(
+    val date: String,
+    val dayOfMonth: Int,
+    val isCurrentMonth: Boolean,
+    val isToday: Boolean,
+    val completionStatus: DayCompletionStatus
+)
