@@ -1,0 +1,1 @@
+ - arch-monument: https://www.flaticon.com/free-icon/arch-monument_14866772?term=islam&page=1&position=46&origin=search&related_id=14866772
