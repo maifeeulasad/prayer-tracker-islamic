@@ -48,3 +48,15 @@ data class Prayer(
     val witrUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.WITR }
     val naflUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.NAFL }
 }
+
+/**
+ * Represents the completion status of a single prayer unit.
+ */
+data class PrayerStatus(
+    val prayerType: PrayerType,
+    val time: String,
+    val fardCompleted: Boolean,
+    val sunnatCompleted: Boolean,
+    val witrCompleted: Boolean = false,
+    val naflCompleted: Boolean = false
+)
