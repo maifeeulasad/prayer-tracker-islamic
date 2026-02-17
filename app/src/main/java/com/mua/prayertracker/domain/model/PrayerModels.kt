@@ -60,3 +60,13 @@ data class PrayerStatus(
     val witrCompleted: Boolean = false,
     val naflCompleted: Boolean = false
 )
+
+/**
+ * Represents the completion status level for a day.
+ */
+enum class DayCompletionStatus {
+    EMPTY,       // No prayers completed
+    PARTIAL,     // Some prayers completed
+    MISSED,      // Fard prayers missed
+    COMPLETE     // All Fard prayers completed
+}
