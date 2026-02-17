@@ -31,3 +31,20 @@ data class PrayerUnit(
     val rakatNumber: Int,
     val displayName: String
 )
+
+/**
+ * Represents a complete prayer (Waqt) with all its units.
+ */
+data class Prayer(
+    val type: PrayerType,
+    val time: String, // Fixed time for now, TODO: implement prayer time calculation
+    val units: List<PrayerUnit>
+) {
+    val displayName: String get() = type.displayName
+    val arabicName: String get() = type.arabicName
+
+    val fardUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.FARD }
+    val sunnatUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.SUNNAT }
+    val witrUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.WITR }
+    val naflUnits: List<PrayerUnit> get() = units.filter { it.category == PrayerCategory.NAFL }
+}
