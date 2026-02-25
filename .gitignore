@@ -14,3 +14,7 @@
 .cxx
 local.properties
 .kotlin/
+
+# ignore jks
+*.jks
+secret/
