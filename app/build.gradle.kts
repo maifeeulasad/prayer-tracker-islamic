@@ -7,6 +7,15 @@ plugins {
 }
 
 android {
+    signingConfigs {
+        create("release") {
+            storeFile = file("../secret/key-store.jks")
+            storePassword = project.findProperty("PRAYER_TRACKER_STORE_PASSWORD") as String
+            keyAlias = project.findProperty("PRAYER_TRACKER_KEY_ALIAS") as String
+            keyPassword = project.findProperty("PRAYER_TRACKER_KEY_PASSWORD") as String
+        }
+    }
+
     namespace = "com.mua.prayertracker"
     compileSdk = 36
 
