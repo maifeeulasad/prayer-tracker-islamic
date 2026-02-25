@@ -1,0 +1,41 @@
+name: Build Release Bundle
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      
+      - name: Decode and save keystore
+        run: |
+          mkdir -p secret
+          echo "${{ secrets.PRAYER_TRACKER_JKS }}" | base64 -d > secret/key-store.jks
+      
+      - name: Clean project
+        run: ./gradlew clean
+      
+      - name: Build release bundle
+        run: |
+          ./gradlew bundleRelease \
+            -PPRAYER_TRACKER_STORE_PASSWORD="${{ secrets.PRAYER_TRACKER_STORE_PASSWORD }}" \
+            -PPRAYER_TRACKER_KEY_ALIAS="${{ secrets.PRAYER_TRACKER_KEY_ALIAS }}" \
+            -PPRAYER_TRACKER_KEY_PASSWORD="${{ secrets.PRAYER_TRACKER_KEY_PASSWORD }}"
+      
+      - name: Verify bundle signature
+        run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
