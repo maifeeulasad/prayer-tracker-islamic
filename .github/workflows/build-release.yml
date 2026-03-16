@@ -7,38 +7,197 @@ on:
   pull_request:
     branches:
       - main
+  release:
+    types:
+      - published
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    env:
+      PACKAGE_NAME: com.mua.prayertracker
+      PLAY_TRACK: production
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-      
+
       - name: Decode and save keystore
         run: |
           mkdir -p secret
           echo "${{ secrets.PRAYER_TRACKER_JKS }}" | base64 -d > secret/key-store.jks
-      
+
       - name: Clean project
         run: ./gradlew clean
-      
+
       - name: Build release bundle
         run: |
           ./gradlew bundleRelease \
             -PPRAYER_TRACKER_STORE_PASSWORD="${{ secrets.PRAYER_TRACKER_STORE_PASSWORD }}" \
             -PPRAYER_TRACKER_KEY_ALIAS="${{ secrets.PRAYER_TRACKER_KEY_ALIAS }}" \
             -PPRAYER_TRACKER_KEY_PASSWORD="${{ secrets.PRAYER_TRACKER_KEY_PASSWORD }}"
-      
+
       - name: Verify bundle signature
         run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+
+      - name: Decode Play service account (release only)
+        if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Missing secret: PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+
+          mkdir -p secret
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ["PLAY_SERVICE_ACCOUNT_JSON"].strip()
+          output_path = Path("secret/play-service-account.json")
+
+          try:
+              parsed = json.loads(raw)
+              output_path.write_text(json.dumps(parsed), encoding="utf-8")
+          except json.JSONDecodeError:
+              decoded = base64.b64decode(raw).decode("utf-8")
+              parsed = json.loads(decoded)
+              output_path.write_text(json.dumps(parsed), encoding="utf-8")
+          PY
+
+      - name: Publish to Google Play (release only)
+        if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+        run: |
+          set -euo pipefail
+
+          AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
+          SERVICE_ACCOUNT_FILE="secret/play-service-account.json"
+
+          if [ ! -f "$AAB_PATH" ]; then
+            echo "AAB not found at $AAB_PATH"
+            exit 1
+          fi
+
+          if [ ! -f "$SERVICE_ACCOUNT_FILE" ]; then
+            echo "Service account file not found at $SERVICE_ACCOUNT_FILE"
+            exit 1
+          fi
+
+          # Build and sign a JWT assertion for OAuth 2.0 service-account flow.
+          python3 - <<'PY'
+          import base64
+          import json
+          import time
+          from pathlib import Path
+
+          service_account = json.loads(Path("secret/play-service-account.json").read_text(encoding="utf-8"))
+          now = int(time.time())
+
+          def b64url(data: bytes) -> str:
+              return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+          header = {"alg": "RS256", "typ": "JWT"}
+          payload = {
+              "iss": service_account["client_email"],
+              "scope": "https://www.googleapis.com/auth/androidpublisher",
+              "aud": "https://oauth2.googleapis.com/token",
+              "iat": now,
+              "exp": now + 3600,
+          }
+
+          unsigned_jwt = (
+              f"{b64url(json.dumps(header, separators=(',', ':')).encode('utf-8'))}."
+              f"{b64url(json.dumps(payload, separators=(',', ':')).encode('utf-8'))}"
+          )
+
+          Path("secret/unsigned-jwt.txt").write_text(unsigned_jwt, encoding="utf-8")
+          Path("secret/service-account-private-key.pem").write_text(
+              service_account["private_key"],
+              encoding="utf-8",
+          )
+          PY
+
+          UNSIGNED_JWT="$(cat secret/unsigned-jwt.txt)"
+          JWT_SIGNATURE="$(printf '%s' "$UNSIGNED_JWT" | openssl dgst -sha256 -sign secret/service-account-private-key.pem | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+          JWT_ASSERTION="$UNSIGNED_JWT.$JWT_SIGNATURE"
+
+          TOKEN_RESPONSE="$(curl -sS --fail-with-body -X POST \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
+            --data-urlencode "assertion=$JWT_ASSERTION" \
+            https://oauth2.googleapis.com/token)"
+
+          ACCESS_TOKEN="$(printf '%s' "$TOKEN_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("access_token", ""))')"
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "Failed to obtain Google OAuth access token"
+            exit 1
+          fi
+
+          CREATE_EDIT_RESPONSE="$(curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits")"
+
+          EDIT_ID="$(printf '%s' "$CREATE_EDIT_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("id", ""))')"
+          if [ -z "$EDIT_ID" ]; then
+            echo "Failed to create Play edit"
+            exit 1
+          fi
+
+          UPLOAD_RESPONSE="$(curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@$AAB_PATH" \
+            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/bundles?uploadType=media")"
+
+          VERSION_CODE="$(printf '%s' "$UPLOAD_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("versionCode", ""))')"
+          if [ -z "$VERSION_CODE" ]; then
+            echo "Failed to upload bundle to Play edit"
+            exit 1
+          fi
+          export VERSION_CODE
+
+          TRACK_PAYLOAD="$(python3 - <<'PY'
+          import json
+          import os
+
+          print(
+              json.dumps(
+                  {
+                      "releases": [
+                          {
+                              "status": "completed",
+                              "versionCodes": [os.environ["VERSION_CODE"]],
+                          }
+                      ]
+                  }
+              )
+          )
+          PY
+          )"
+
+          curl -sS --fail-with-body -X PUT \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$TRACK_PAYLOAD" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/tracks/$PLAY_TRACK" >/dev/null
+
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID:commit" >/dev/null
+
+          # Best effort cleanup for generated credential material.
+          rm -f secret/unsigned-jwt.txt secret/service-account-private-key.pem secret/play-service-account.json
