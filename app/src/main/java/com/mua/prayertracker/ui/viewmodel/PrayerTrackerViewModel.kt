@@ -1,5 +1,6 @@
 package com.mua.prayertracker.ui.viewmodel
 
+import android.annotation.SuppressLint
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -53,8 +54,11 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _hasLocationPermission = MutableStateFlow(false)
+    val hasLocationPermission: StateFlow<Boolean> = _hasLocationPermission.asStateFlow()
+
     init {
-        loadPrayers()
+        loadPrayersWithPlaceholderTimes()
         loadCurrentDayRecord()
         updateNextPrayerInfo()
         loadCalendarForMonth(_selectedMonth.value)
@@ -63,8 +67,16 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     /**
      * Load all prayers with their units.
      */
-    private fun loadPrayers() {
-        _prayers.value = PrayerTimeProvider.getPrayersWithUnits()
+    private fun loadPrayersWithPlaceholderTimes() {
+        val placeholderTimes = mapOf(
+            PrayerType.FAJR to "--:--",
+//            PrayerType.SUNRISE to "--:--",
+            PrayerType.DHUHR to "--:--",
+            PrayerType.ASR to "--:--",
+            PrayerType.MAGHRIB to "--:--",
+            PrayerType.ISHA to "--:--"
+        )
+        _prayers.value = PrayerTimeProvider.getPrayersWithUnits(placeholderTimes)
     }
 
     /**
@@ -223,12 +235,20 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
      * Update information about the next prayer.
      */
     private fun updateNextPrayerInfo() {
+        updateNextPrayerInfo(currentPrayerTimes())
+    }
+
+    private fun updateNextPrayerInfo(prayerTimes: Map<PrayerType, String>) {
         val now = Calendar.getInstance()
         val currentHour = now.get(Calendar.HOUR_OF_DAY)
         val currentMinute = now.get(Calendar.MINUTE)
 
-        val nextPrayer = PrayerTimeProvider.getNextPrayer(currentHour, currentMinute)
-        val timeRemaining = PrayerTimeProvider.getTimeUntilNextPrayer(currentHour, currentMinute)
+        val nextPrayer = PrayerTimeProvider.getNextPrayer(currentHour, currentMinute, prayerTimes)
+        val timeRemaining = PrayerTimeProvider.getTimeUntilNextPrayer(
+            currentHour,
+            currentMinute,
+            prayerTimes
+        )
 
         _nextPrayerInfo.value = Pair(nextPrayer, timeRemaining)
     }
@@ -238,6 +258,47 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
      */
     fun refreshNextPrayerInfo() {
         updateNextPrayerInfo()
+    }
+
+    @SuppressLint("MissingPermission")
+    fun loadPrayerTimesFromLocation() {
+        viewModelScope.launch {
+            when (val result = PrayerTimeProvider.getPrayerTimes(getApplication())) {
+                is PrayerTimeProvider.PrayerTimesResult.Success -> {
+                    _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
+                    updateNextPrayerInfo(result.times)
+                }
+
+                PrayerTimeProvider.PrayerTimesResult.PermissionDenied -> {
+                    _hasLocationPermission.value = false
+                }
+
+                PrayerTimeProvider.PrayerTimesResult.LocationUnavailable -> {
+                    // todo: render issue for location
+                }
+
+                is PrayerTimeProvider.PrayerTimesResult.PolarAnomalyError -> {
+                    // todo: render warning
+                }
+
+                is PrayerTimeProvider.PrayerTimesResult.Error -> {
+                    // todo: render error with irritating popover
+                }
+            }
+        }
+    }
+
+    fun setLocationPermissionGranted(granted: Boolean) {
+        _hasLocationPermission.value = granted
+        if (granted) {
+            loadPrayerTimesFromLocation()
+        }
+    }
+
+    private fun currentPrayerTimes(): Map<PrayerType, String> {
+        return _prayers.value.associate { prayer ->
+            prayer.type to prayer.time
+        }
     }
 
     private fun getTodayDateString(): String {
