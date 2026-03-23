@@ -5,11 +5,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mua.prayertracker.data.PrayerDatabase
+import com.mua.prayertracker.data.PrayerSettingsStorage
 import com.mua.prayertracker.data.entity.PrayerRecordEntity
 import com.mua.prayertracker.domain.PrayerTimeProvider
 import com.mua.prayertracker.domain.model.CalendarDay
 import com.mua.prayertracker.domain.model.DayCompletionStatus
 import com.mua.prayertracker.domain.model.Prayer
+import com.mua.prayertracker.domain.model.PrayerCalculationSettings
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.repository.PrayerRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +31,7 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private val database = PrayerDatabase.getInstance(application)
     private val repository = PrayerRepository(database.prayerRecordDao())
+    private val settingsStorage = PrayerSettingsStorage(application)
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     private val monthFormat = SimpleDateFormat("yyyy-MM", Locale.getDefault())
@@ -56,6 +59,9 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private val _hasLocationPermission = MutableStateFlow(false)
     val hasLocationPermission: StateFlow<Boolean> = _hasLocationPermission.asStateFlow()
+
+    private val _prayerSettings = MutableStateFlow(settingsStorage.load())
+    val prayerSettings: StateFlow<PrayerCalculationSettings> = _prayerSettings.asStateFlow()
 
     init {
         loadPrayersWithPlaceholderTimes()
@@ -263,7 +269,12 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     @SuppressLint("MissingPermission")
     fun loadPrayerTimesFromLocation() {
         viewModelScope.launch {
-            when (val result = PrayerTimeProvider.getPrayerTimes(getApplication())) {
+            when (
+                val result = PrayerTimeProvider.getPrayerTimes(
+                    context = getApplication(),
+                    config = _prayerSettings.value.toCalculationConfig()
+                )
+            ) {
                 is PrayerTimeProvider.PrayerTimesResult.Success -> {
                     _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
                     updateNextPrayerInfo(result.times)
@@ -291,6 +302,45 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     fun setLocationPermissionGranted(granted: Boolean) {
         _hasLocationPermission.value = granted
         if (granted) {
+            loadPrayerTimesFromLocation()
+        }
+    }
+
+    fun updateCalculationMethod(method: PrayerTimeProvider.CalculationMethod) {
+        updatePrayerSettings { it.copy(method = method) }
+    }
+
+    fun updateMadhab(madhab: PrayerTimeProvider.Madhab) {
+        updatePrayerSettings { it.copy(madhab = madhab) }
+    }
+
+    fun updateHighLatitudeRule(rule: PrayerTimeProvider.HighLatitudeRule?) {
+        updatePrayerSettings { it.copy(highLatitudeRule = rule) }
+    }
+
+    fun updateElevationMeters(elevationMeters: Double) {
+        updatePrayerSettings { it.copy(elevationMeters = elevationMeters.coerceAtLeast(0.0)) }
+    }
+
+    fun updateOffsetMinutes(prayerType: PrayerType, minutes: Int) {
+        val clampedMinutes = minutes.coerceIn(-90, 90)
+        updatePrayerSettings { settings ->
+            when (prayerType) {
+                PrayerType.FAJR -> settings.copy(fajrOffsetMinutes = clampedMinutes)
+                PrayerType.DHUHR -> settings.copy(dhuhrOffsetMinutes = clampedMinutes)
+                PrayerType.ASR -> settings.copy(asrOffsetMinutes = clampedMinutes)
+                PrayerType.MAGHRIB -> settings.copy(maghribOffsetMinutes = clampedMinutes)
+                PrayerType.ISHA -> settings.copy(ishaOffsetMinutes = clampedMinutes)
+            }
+        }
+    }
+
+    private fun updatePrayerSettings(transform: (PrayerCalculationSettings) -> PrayerCalculationSettings) {
+        val updated = transform(_prayerSettings.value)
+        _prayerSettings.value = updated
+        settingsStorage.save(updated)
+
+        if (_hasLocationPermission.value) {
             loadPrayerTimesFromLocation()
         }
     }
