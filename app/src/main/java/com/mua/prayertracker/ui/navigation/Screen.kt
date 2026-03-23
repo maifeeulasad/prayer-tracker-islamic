@@ -3,8 +3,10 @@ package com.mua.prayertracker.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -29,6 +31,13 @@ sealed class Screen(
         selectedIcon = Icons.Filled.DateRange,
         unselectedIcon = Icons.Outlined.DateRange
     )
+
+    data object Settings : Screen(
+        route = "settings",
+        title = "Settings",
+        selectedIcon = Icons.Filled.Settings,
+        unselectedIcon = Icons.Outlined.Settings
+    )
 }
 
 /**
@@ -36,5 +45,6 @@ sealed class Screen(
  */
 val bottomNavItems = listOf(
     Screen.Tracker,
-    Screen.Calendar
+    Screen.Calendar,
+    Screen.Settings,
 )
