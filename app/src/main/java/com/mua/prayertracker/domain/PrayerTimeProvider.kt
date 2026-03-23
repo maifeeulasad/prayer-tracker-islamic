@@ -788,7 +788,10 @@ object PrayerTimeProvider {
             Manifest.permission.ACCESS_COARSE_LOCATION
         ]
     )
-    suspend fun getPrayerTimes(context: Context): PrayerTimesResult {
+    suspend fun getPrayerTimes(
+        context: Context,
+        config: CalculationConfig = defaultConfig
+    ): PrayerTimesResult {
         logI("getPrayerTimes() called")
 
         return try {
@@ -817,11 +820,6 @@ object PrayerTimeProvider {
             logI("System timezone: ${calendar.timeZone.id}")
             logI("Timezone offset from system: $timezoneOffset hours")
             logI("Date: $year-$month-$day")
-
-            val config = CalculationConfig(
-                method = CalculationMethod.KARACHI,
-                madhab = Madhab.HANAFI
-            )
 
             val rawTimes = calculatePrayerTimes(
                 latitude = location.latitude,
