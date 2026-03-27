@@ -23,6 +23,7 @@ val DarkSurface = Color(0xFF2D2D2D)
 val SuccessGreen = Color(0xFF4CAF50)
 val WarningAmber = Color(0xFFFFC107)
 val ErrorRed = Color(0xFFE53935)
+val WarningRed = Color(0xFFE57373)
 
 // Text Colors
 val TextPrimary = Color(0xFF1E1E1E)
