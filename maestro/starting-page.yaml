@@ -1,0 +1,4 @@
+appId: com.mua.prayertracker
+---
+- launchApp
+- takeScreenshot: "starting_page.png"
