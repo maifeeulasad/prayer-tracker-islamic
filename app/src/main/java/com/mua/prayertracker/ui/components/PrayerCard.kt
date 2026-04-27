@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -36,14 +37,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mua.prayertracker.data.entity.PrayerRecordEntity
+import com.mua.prayertracker.domain.model.ForbiddenTime
+import com.mua.prayertracker.domain.model.ForbiddenTimeType
+import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.ui.theme.FardColor
 import com.mua.prayertracker.ui.theme.GoldenAccent
 import com.mua.prayertracker.ui.theme.SuccessGreen
 import com.mua.prayertracker.ui.theme.SunnatColor
+import com.mua.prayertracker.ui.theme.WarningRed
 import com.mua.prayertracker.ui.theme.WitrColor
 
 /**
@@ -140,12 +146,31 @@ fun PrayerCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = prayerTime,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = FardColor
-                    )
+                    val prayerTimeParts = prayerTime.split("~", limit = 2).map { it.trim() }
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        if (prayerTimeParts.size == 2) {
+                            Text(
+                                text = prayerTimeParts[0],
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = FardColor
+                            )
+                            Text(
+                                text = prayerTimeParts[1],
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = FardColor
+                            )
+                        } else {
+                            Text(
+                                text = prayerTime,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = FardColor
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
@@ -414,5 +439,234 @@ private fun getPrayerGuide(prayerType: PrayerType): String {
         PrayerType.ASR -> "4 Sunnat Rakats followed by 4 Fard Rakats."
         PrayerType.MAGHRIB -> "3 Fard Rakats immediately after sunset, followed by 2 Sunnat."
         PrayerType.ISHA -> "After Esha time: 4 Sunnat, 4 Fard, 2 Sunnat, and 3 Witr Rakats."
+    }
+}
+
+/**
+ * Card displaying forbidden times when prayer is not allowed.
+ *
+ * There are three forbidden (makruh) times:
+ * 1. During Sunrise (~20 minutes)
+ * 2. At Zenith (very brief, ~5 minutes)
+ * 3. During Sunset (~20 minutes)
+ *
+ * Reference: Islam-QA - Times when prayer is prohibited
+ */
+@Composable
+fun ForbiddenTimeCard(
+    forbiddenTime: ForbiddenTime,
+    modifier: Modifier = Modifier
+) {
+    val cardColor = if (forbiddenTime.isCurrentlyActive) {
+        WarningRed.copy(alpha = 0.15f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    }
+
+    val iconColor = if (forbiddenTime.isCurrentlyActive) {
+        WarningRed
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    }
+
+    val icon: ImageVector = when (forbiddenTime.type) {
+        ForbiddenTimeType.SUNRISE -> Icons.Default.Warning
+        ForbiddenTimeType.ZENITH -> Icons.Default.Warning
+        ForbiddenTimeType.SUNSET -> Icons.Default.Warning
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = "Forbidden time",
+                    tint = iconColor,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = forbiddenTime.type.displayName,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (forbiddenTime.isCurrentlyActive) {
+                            WarningRed
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
+                    Text(
+                        text = forbiddenTime.type.arabicName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (forbiddenTime.isCurrentlyActive) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "NOW - Prayer not allowed",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = WarningRed
+                        )
+                    }
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                Text(
+                    text = "${forbiddenTime.startTimeFormatted} - ${forbiddenTime.endTimeFormatted}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${forbiddenTime.durationMinutes} min",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Card showing a prayer time range with start and end times.
+ *
+ * Each prayer has a valid time window:
+ * - Fajr: Dawn to Sunrise
+ * - Dhuhr: After zenith to Asr
+ * - Asr: Afternoon to Sunset
+ * - Maghrib: Sunset to twilight end
+ * - Isha: Night to midnight
+ *
+ * Reference: Islam 365 - When to Pray: Understanding the Five Daily Prayer Times
+ */
+@Composable
+fun PrayerRangeCard(
+    prayerTimeRange: PrayerTimeRange,
+    modifier: Modifier = Modifier
+) {
+    val rangeColor = when (prayerTimeRange.preferredPortion) {
+        com.mua.prayertracker.domain.model.PreferredPortion.EARLY -> SuccessGreen.copy(alpha = 0.15f)
+        com.mua.prayertracker.domain.model.PreferredPortion.MIDDLE -> GoldenAccent.copy(alpha = 0.15f)
+        com.mua.prayertracker.domain.model.PreferredPortion.LATE -> WarningRed.copy(alpha = 0.15f)
+    }
+
+    val statusIndicatorColor = when (prayerTimeRange.preferredPortion) {
+        com.mua.prayertracker.domain.model.PreferredPortion.EARLY -> SuccessGreen
+        com.mua.prayertracker.domain.model.PreferredPortion.MIDDLE -> GoldenAccent
+        com.mua.prayertracker.domain.model.PreferredPortion.LATE -> WarningRed
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = rangeColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(statusIndicatorColor)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "${prayerTimeRange.prayerType.displayName} Time Window",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = when (prayerTimeRange.preferredPortion) {
+                            com.mua.prayertracker.domain.model.PreferredPortion.EARLY -> "Best Time - Pray Early"
+                            com.mua.prayertracker.domain.model.PreferredPortion.MIDDLE -> "Acceptable Time"
+                            com.mua.prayertracker.domain.model.PreferredPortion.LATE -> "Late - Still Valid"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusIndicatorColor
+                    )
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                Text(
+                    text = "${prayerTimeRange.startTimeFormatted} - ${prayerTimeRange.endTimeFormatted}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${prayerTimeRange.durationMinutes} min window",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Section header for different categories of prayer information.
+ */
+@Composable
+fun SectionHeader(
+    title: String,
+    subtitle: String? = null,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        if (subtitle != null) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
