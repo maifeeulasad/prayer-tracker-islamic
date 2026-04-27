@@ -23,7 +23,7 @@ jobs:
       - name: Create Emulator
         run: |
           sdkmanager "system-images;android-30;google_apis;x86_64"
-          avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
+          echo no | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
 
       - name: Start Emulator
         run: |
