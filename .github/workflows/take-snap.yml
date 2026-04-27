@@ -27,6 +27,7 @@ jobs:
 
       - name: Start Emulator
         run: |
+          export PATH=$PATH:$ANDROID_HOME/emulator
           emulator -avd test -no-window -no-audio -no-boot-anim &
           adb wait-for-device
           adb shell input keyevent 82
