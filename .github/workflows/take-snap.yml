@@ -25,8 +25,8 @@ jobs:
           ANDROID_AVD_HOME: $HOME/.android/avd
         run: |
           mkdir -p $ANDROID_AVD_HOME
-          sdkmanager "system-images;android-30;google_apis;x86_64"
-          echo no | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
+          sdkmanager "system-images;android-30;google_apis;arm64-v8a"
+          echo no | avdmanager create avd -n test -k "system-images;android-30;google_apis;arm64-v8a" --force
 
       - name: Start Emulator
         env:
