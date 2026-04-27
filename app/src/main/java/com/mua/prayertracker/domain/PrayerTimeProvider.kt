@@ -13,10 +13,15 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.mua.prayertracker.domain.model.CompletePrayerSchedule
+import com.mua.prayertracker.domain.model.ForbiddenTime
+import com.mua.prayertracker.domain.model.ForbiddenTimeType
 import com.mua.prayertracker.domain.model.Prayer
 import com.mua.prayertracker.domain.model.PrayerCategory
+import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.model.PrayerUnit
+import com.mua.prayertracker.domain.model.PreferredPortion
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import java.text.SimpleDateFormat
@@ -116,6 +121,22 @@ object PrayerTimeProvider {
         object LocationUnavailable : PrayerTimesResult()
         data class PolarAnomalyError(val latitude: Double) : PrayerTimesResult()
         data class Error(val cause: Throwable) : PrayerTimesResult()
+    }
+
+    /**
+     * Result type for complete prayer schedule including ranges and forbidden times.
+     * This provides the full prayer timing information needed for the UI.
+     *
+     * References:
+     * - Islam 365: When to Pray - Understanding the Five Daily Prayer Times
+     * - Islam Question & Answer: What Are the Times of the Five Daily Prayers?
+     */
+    sealed class CompleteScheduleResult {
+        data class Success(val schedule: CompletePrayerSchedule) : CompleteScheduleResult()
+        object PermissionDenied : CompleteScheduleResult()
+        object LocationUnavailable : CompleteScheduleResult()
+        data class PolarAnomalyError(val latitude: Double) : CompleteScheduleResult()
+        data class Error(val cause: Throwable) : CompleteScheduleResult()
     }
 
     private val defaultConfig = CalculationConfig()
@@ -940,5 +961,681 @@ object PrayerTimeProvider {
         if (hour !in 0..23 || minute !in 0..59) return null
 
         return hour to minute
+    }
+
+    // ==================== PRAYER TIME RANGES ====================
+
+    /**
+     * Calculate prayer time ranges for a given set of prayer times.
+     * Each prayer has a start time (beginning of validity) and end time
+     * (when the next prayer time begins or a specific limit is reached).
+     *
+     * Prayer Time Ranges (based on Islamic scholarship):
+     * - FAJR: Dawn (start) → Sunrise (end)
+     * - DHUHR: After zenith (start) → Asr time (end)
+     * - ASR: Shadow length (start) → Sunset (end)
+     * - MAGHRIB: Sunset (start) → Twilight end (end)
+     * - ISHA: Darkness (start) → Midnight (end) [main opinion]
+     *
+     * @param prayerTimesRaw Map of prayer type to decimal hours
+     * @param sunriseHours Sunrise time in decimal hours
+     * @param sunsetHours Sunset time in decimal hours
+     * @param currentHour Current hour for determining active range
+     * @param currentMinute Current minute for determining active range
+     * @return Map of prayer type to PrayerTimeRange
+     *
+     * References:
+     * - Islam-QA: What Are the Times of the Five Daily Prayers?
+     * - Hijri Guide: How to Calculate Prayer Times
+     * - Fiqh Islamonline: Times of the Five Daily Prayers
+     */
+    fun calculatePrayerTimeRanges(
+        prayerTimesRaw: Map<PrayerType, Double>,
+        sunriseHours: Double,
+        sunsetHours: Double,
+        currentHour: Int,
+        currentMinute: Int,
+        timezoneOffsetHours: Double
+    ): Map<PrayerType, PrayerTimeRange> {
+        logI("========================================")
+        logI("CALCULATING PRAYER TIME RANGES")
+        logI("========================================")
+        logI("Sunrise: ${formatTime(sunriseHours)} ($sunriseHours hours)")
+        logI("Sunset: ${formatTime(sunsetHours)} ($sunsetHours hours)")
+        logI("Current time: $currentHour:$currentMinute")
+        logI("Timezone offset: $timezoneOffsetHours hours")
+        logI("----------------------------------------")
+
+        val currentTimeMinutes = currentHour * 60 + currentMinute
+
+        // Calculate twilight end time (approximately 90 minutes after sunset)
+        // This varies by location and season, but ~90 min is a standard approximation
+        val twilightDurationMinutes = 90
+        val twilightEndHours = sunsetHours + twilightDurationMinutes / 60.0
+        logI("Twilight ends approximately: ${formatTime(twilightEndHours)}")
+
+        // Calculate Islamic midnight (halfway between Maghrib and Fajr)
+        // This is used as the end time for Isha prayer
+        val midnightHours = calculateIslamicMidnight(
+            sunsetHours,
+            prayerTimesRaw[PrayerType.FAJR] ?: sunriseHours,
+            timezoneOffsetHours
+        )
+        logI("Islamic midnight: ${formatTime(midnightHours)}")
+
+        // Build ranges for each prayer
+        val ranges = mutableMapOf<PrayerType, PrayerTimeRange>()
+
+        // FAJR RANGE: Dawn → Sunrise
+        // Reference: Islam 365 - Fajr time ends at sunrise
+        val fajrStart = prayerTimesRaw[PrayerType.FAJR] ?: sunriseHours - 1.5
+        val fajrEnd = sunriseHours
+        val fajrRangeMinutes = ((fajrEnd - fajrStart) * 60).toInt()
+        val fajrActive = isTimeInRange(currentTimeMinutes, fajrStart, fajrEnd)
+        ranges[PrayerType.FAJR] = PrayerTimeRange(
+            prayerType = PrayerType.FAJR,
+            startTimeFormatted = formatTime(fajrStart),
+            endTimeFormatted = formatTime(fajrEnd),
+            startTimeHours = fajrStart,
+            endTimeHours = fajrEnd,
+            durationMinutes = fajrRangeMinutes,
+            isCurrentlyActive = fajrActive,
+            preferredPortion = calculatePreferredPortion(currentTimeMinutes, fajrStart, fajrEnd)
+        )
+        logI("FAJR Range: ${formatTime(fajrStart)} → ${formatTime(fajrEnd)} (${fajrRangeMinutes} min, active: $fajrActive)")
+
+        // DHUHR RANGE: After zenith → Asr time
+        // Reference: Islam-QA - Dhuhr begins just after zenith, ends when Asr begins
+        val dhuhrStart = prayerTimesRaw[PrayerType.DHUHR] ?: (sunriseHours + 6.0)
+        val dhuhrEnd = prayerTimesRaw[PrayerType.ASR] ?: (sunsetHours - 2.0)
+        val dhuhrRangeMinutes = ((dhuhrEnd - dhuhrStart) * 60).toInt()
+        val dhuhrActive = isTimeInRange(currentTimeMinutes, dhuhrStart, dhuhrEnd)
+        ranges[PrayerType.DHUHR] = PrayerTimeRange(
+            prayerType = PrayerType.DHUHR,
+            startTimeFormatted = formatTime(dhuhrStart),
+            endTimeFormatted = formatTime(dhuhrEnd),
+            startTimeHours = dhuhrStart,
+            endTimeHours = dhuhrEnd,
+            durationMinutes = dhuhrRangeMinutes,
+            isCurrentlyActive = dhuhrActive,
+            preferredPortion = calculatePreferredPortion(currentTimeMinutes, dhuhrStart, dhuhrEnd)
+        )
+        logI("DHUHR Range: ${formatTime(dhuhrStart)} → ${formatTime(dhuhrEnd)} (${dhuhrRangeMinutes} min, active: $dhuhrActive)")
+
+        // ASR RANGE: Afternoon → Sunset
+        // Reference: Islam-QA - Asr begins when shadow equals object length, ends at sunset
+        // Note: Late Asr (close to sunset) is still valid but discouraged
+        val asrStart = prayerTimesRaw[PrayerType.ASR] ?: (sunsetHours - 3.0)
+        val asrEnd = sunsetHours
+        val asrRangeMinutes = ((asrEnd - asrStart) * 60).toInt()
+        val asrActive = isTimeInRange(currentTimeMinutes, asrStart, asrEnd)
+        ranges[PrayerType.ASR] = PrayerTimeRange(
+            prayerType = PrayerType.ASR,
+            startTimeFormatted = formatTime(asrStart),
+            endTimeFormatted = formatTime(asrEnd),
+            startTimeHours = asrStart,
+            endTimeHours = asrEnd,
+            durationMinutes = asrRangeMinutes,
+            isCurrentlyActive = asrActive,
+            preferredPortion = calculatePreferredPortion(currentTimeMinutes, asrStart, asrEnd)
+        )
+        logI("ASR Range: ${formatTime(asrStart)} → ${formatTime(asrEnd)} (${asrRangeMinutes} min, active: $asrActive)")
+
+        // MAGHRIB RANGE: Sunset → End of twilight
+        // Reference: Islam-QA - Maghrib starts at sunset, ends when red twilight disappears
+        // This is the SHORTEST window - typically ~90 minutes
+        val maghribStart = prayerTimesRaw[PrayerType.MAGHRIB] ?: sunsetHours
+        val maghribEnd = twilightEndHours
+        val maghribRangeMinutes = ((maghribEnd - maghribStart) * 60).toInt()
+        val maghribActive = isTimeInRange(currentTimeMinutes, maghribStart, maghribEnd)
+        ranges[PrayerType.MAGHRIB] = PrayerTimeRange(
+            prayerType = PrayerType.MAGHRIB,
+            startTimeFormatted = formatTime(maghribStart),
+            endTimeFormatted = formatTime(maghribEnd),
+            startTimeHours = maghribStart,
+            endTimeHours = maghribEnd,
+            durationMinutes = maghribRangeMinutes,
+            isCurrentlyActive = maghribActive,
+            preferredPortion = calculatePreferredPortion(currentTimeMinutes, maghribStart, maghribEnd)
+        )
+        logI("MAGHRIB Range: ${formatTime(maghribStart)} → ${formatTime(maghribEnd)} (${maghribRangeMinutes} min, active: $maghribActive)")
+
+        // ISHA RANGE: Night → Midnight (or Fajr)
+        // Reference: Islam-QA - Isha ends at midnight (main opinion), some allow until Fajr
+        val ishaStart = prayerTimesRaw[PrayerType.ISHA] ?: (sunsetHours + 2.0)
+        val ishaEnd = midnightHours
+        val ishaRangeMinutes = if (ishaEnd > ishaStart) {
+            ((ishaEnd - ishaStart) * 60).toInt()
+        } else {
+            // Handles midnight crossing
+            ((24.0 - ishaStart + ishaEnd) * 60).toInt()
+        }
+        val ishaActive = isTimeInRangeCrossingMidnight(currentTimeMinutes, ishaStart, ishaEnd)
+        ranges[PrayerType.ISHA] = PrayerTimeRange(
+            prayerType = PrayerType.ISHA,
+            startTimeFormatted = formatTime(ishaStart),
+            endTimeFormatted = formatTime(ishaEnd),
+            startTimeHours = ishaStart,
+            endTimeHours = ishaEnd,
+            durationMinutes = ishaRangeMinutes,
+            isCurrentlyActive = ishaActive,
+            preferredPortion = calculatePreferredPortion(currentTimeMinutes, ishaStart, ishaEnd)
+        )
+        logI("ISHA Range: ${formatTime(ishaStart)} → ${formatTime(ishaEnd)} (${ishaRangeMinutes} min, active: $ishaActive)")
+
+        logI("========================================")
+        logI("PRAYER TIME RANGES CALCULATION COMPLETE")
+        logI("========================================")
+        logI("")
+
+        return ranges
+    }
+
+    /**
+     * Calculate Islamic midnight.
+     * Midnight in Islamic time calculation is the midpoint between Maghrib and Fajr.
+     *
+     * Formula: midnight = (sunset + fajr_next_day) / 2
+     *
+     * Reference: Islam-QA - What Are the Times of the Five Daily Prayers?
+     */
+    private fun calculateIslamicMidnight(
+        sunsetHours: Double,
+        fajrHours: Double,
+        timezoneOffsetHours: Double
+    ): Double {
+        logD("Calculating Islamic midnight from sunset=$sunsetHours, fajr=$fajrHours")
+
+        // If Fajr is before sunset, it means it's the next day's Fajr
+        // So we add 24 hours to Fajr for calculation
+        var adjustedFajr = fajrHours
+        if (adjustedFajr <= sunsetHours) {
+            adjustedFajr += 24.0
+            logD("Fajr adjusted to next day: $adjustedFajr")
+        }
+
+        // Calculate midpoint
+        val midnightDecimal = (sunsetHours + adjustedFajr) / 2.0
+
+        // Normalize to 0-24 range
+        val midnightNormalized = if (midnightDecimal >= 24.0) midnightDecimal - 24.0 else midnightDecimal
+
+        logD("Islamic midnight calculated: $midnightNormalized hours")
+        return midnightNormalized
+    }
+
+    /**
+     * Check if current time (in minutes) falls within a time range.
+     */
+    private fun isTimeInRange(
+        currentMinutes: Int,
+        startHours: Double,
+        endHours: Double
+    ): Boolean {
+        val startMinutes = (startHours * 60).toInt()
+        val endMinutes = (endHours * 60).toInt()
+        return currentMinutes in startMinutes until endMinutes
+    }
+
+    /**
+     * Check if current time falls within a range that crosses midnight.
+     */
+    private fun isTimeInRangeCrossingMidnight(
+        currentMinutes: Int,
+        startHours: Double,
+        endHours: Double
+    ): Boolean {
+        val startMinutes = (startHours * 60).toInt()
+        val endMinutes = (endHours * 60).toInt()
+
+        return if (endMinutes > startMinutes) {
+            // Normal range
+            currentMinutes in startMinutes until endMinutes
+        } else {
+            // Crosses midnight
+            currentMinutes >= startMinutes || currentMinutes < endMinutes
+        }
+    }
+
+    /**
+     * Calculate which portion of the prayer time window we're in.
+     * Early prayer is always best in Islam.
+     *
+     * Reference: Fiqh Islamonlone - Preferred vs valid time
+     */
+    private fun calculatePreferredPortion(
+        currentMinutes: Int,
+        startHours: Double,
+        endHours: Double
+    ): PreferredPortion {
+        val startMinutes = (startHours * 60).toInt()
+        val endMinutes = (endHours * 60).toInt()
+        val totalMinutes = endMinutes - startMinutes
+        val elapsedMinutes = currentMinutes - startMinutes
+        val progress = elapsedMinutes.toDouble() / totalMinutes.toDouble()
+
+        return when {
+            progress < 0.33 -> PreferredPortion.EARLY
+            progress < 0.66 -> PreferredPortion.MIDDLE
+            else -> PreferredPortion.LATE
+        }
+    }
+
+    // ==================== FORBIDDEN TIMES ====================
+
+    /**
+     * Calculate forbidden times when prayer is not allowed.
+     *
+     * There are THREE forbidden (makruh) times:
+     * 1. DURING SUNRISE - ~20 minutes after sunrise
+     * 2. AT ZENITH - very brief, just before Dhuhr starts
+     * 3. DURING SUNSET - ~20 minutes before/after sunset
+     *
+     * These times are associated with sun worship practices in other religions,
+     * so Muslims are instructed to avoid praying at these moments.
+     *
+     * Reference: Islam-QA - Times when prayer is prohibited
+     *
+     * @param sunriseHours Sunrise time in decimal hours
+     * @param sunsetHours Sunset time in decimal hours
+     * @param dhuhrHours Dhuhr start time in decimal hours
+     * @param currentHour Current hour
+     * @param currentMinute Current minute
+     * @return List of ForbiddenTime objects
+     */
+    fun calculateForbiddenTimes(
+        sunriseHours: Double,
+        sunsetHours: Double,
+        dhuhrHours: Double,
+        currentHour: Int,
+        currentMinute: Int
+    ): List<ForbiddenTime> {
+        logI("========================================")
+        logI("CALCULATING FORBIDDEN TIMES")
+        logI("========================================")
+        logI("Sunrise: ${formatTime(sunriseHours)}")
+        logI("Sunset: ${formatTime(sunsetHours)}")
+        logI("Dhuhr: ${formatTime(dhuhrHours)}")
+        logI("Current: $currentHour:$currentMinute")
+        logI("----------------------------------------")
+
+        val currentMinutes = currentHour * 60 + currentMinute
+        val forbiddenTimes = mutableListOf<ForbiddenTime>()
+
+        // 1. SUNRISE FORBIDDEN TIME
+        // Starts at sunrise, ends approximately 20 minutes after
+        // Reference: Islam 365 - Forbidden times for prayer
+        val sunriseForbiddenDurationMinutes = 20
+        val sunriseEndHours = sunriseHours + sunriseForbiddenDurationMinutes / 60.0
+        val sunriseForbiddenActive = isTimeInRange(
+            currentMinutes,
+            sunriseHours,
+            sunriseEndHours
+        )
+        val sunriseForbidden = ForbiddenTime(
+            type = ForbiddenTimeType.SUNRISE,
+            startTimeFormatted = formatTime(sunriseHours),
+            endTimeFormatted = formatTime(sunriseEndHours),
+            startTimeHours = sunriseHours,
+            endTimeHours = sunriseEndHours,
+            durationMinutes = sunriseForbiddenDurationMinutes,
+            description = "Forbidden during sunrise - associated with sun worship practices",
+            isCurrentlyActive = sunriseForbiddenActive
+        )
+        forbiddenTimes.add(sunriseForbidden)
+        logI("SUNRISE Forbidden: ${formatTime(sunriseHours)} → ${formatTime(sunriseEndHours)} (${sunriseForbiddenDurationMinutes} min, active: $sunriseForbiddenActive)")
+
+        // 2. ZENITH FORBIDDEN TIME (Solar Noon Prohibition)
+        // Very brief period when sun is exactly at highest point
+        // Just before Dhuhr time begins
+        // Reference: Islam-QA - Brief prohibition at solar noon
+        val zenithDurationMinutes = 5  // Very brief - typically 1-5 minutes
+        val zenithStartHours = dhuhrHours - zenithDurationMinutes / 60.0
+        val zenithEndHours = dhuhrHours
+        val zenithForbiddenActive = isTimeInRange(
+            currentMinutes,
+            zenithStartHours,
+            zenithEndHours
+        )
+        val zenithForbidden = ForbiddenTime(
+            type = ForbiddenTimeType.ZENITH,
+            startTimeFormatted = formatTime(zenithStartHours),
+            endTimeFormatted = formatTime(zenithEndHours),
+            startTimeHours = zenithStartHours,
+            endTimeHours = zenithEndHours,
+            durationMinutes = zenithDurationMinutes,
+            description = "Forbidden at solar zenith - brief prohibition before Dhuhr",
+            isCurrentlyActive = zenithForbiddenActive
+        )
+        forbiddenTimes.add(zenithForbidden)
+        logI("ZENITH Forbidden: ${formatTime(zenithStartHours)} → ${formatTime(zenithEndHours)} (${zenithDurationMinutes} min, active: $zenithForbiddenActive)")
+
+        // 3. SUNSET FORBIDDEN TIME
+        // Starts approximately 20 minutes before sunset, ends at Maghrib
+        // Reference: Islam 365 - Forbidden during sunset
+        val sunsetForbiddenDurationMinutes = 20
+        val sunsetStartHours = sunsetHours - sunsetForbiddenDurationMinutes / 60.0
+        val sunsetForbiddenActive = isTimeInRange(
+            currentMinutes,
+            sunsetStartHours,
+            sunsetHours
+        )
+        val sunsetForbidden = ForbiddenTime(
+            type = ForbiddenTimeType.SUNSET,
+            startTimeFormatted = formatTime(sunsetStartHours),
+            endTimeFormatted = formatTime(sunsetHours),
+            startTimeHours = sunsetStartHours,
+            endTimeHours = sunsetHours,
+            durationMinutes = sunsetForbiddenDurationMinutes,
+            description = "Forbidden during sunset - associated with sun worship practices",
+            isCurrentlyActive = sunsetForbiddenActive
+        )
+        forbiddenTimes.add(sunsetForbidden)
+        logI("SUNSET Forbidden: ${formatTime(sunsetStartHours)} → ${formatTime(sunsetHours)} (${sunsetForbiddenDurationMinutes} min, active: $sunsetForbiddenActive)")
+
+        logI("========================================")
+        logI("FORBIDDEN TIMES CALCULATION COMPLETE")
+        logI("Total forbidden periods: ${forbiddenTimes.size}")
+        logI("========================================")
+        logI("")
+
+        return forbiddenTimes
+    }
+
+    /**
+     * Calculate the complete prayer schedule with all ranges and forbidden times.
+     *
+     * This is the main entry point for getting comprehensive prayer timing data.
+     *
+     * @param latitude Location latitude
+     * @param longitude Location longitude
+     * @param year Year
+     * @param month Month (1-12)
+     * @param day Day of month
+     * @param timezoneOffsetHours Timezone offset in hours
+     * @param config Calculation configuration
+     * @return Map containing prayer times, ranges, and forbidden times
+     */
+    fun calculateCompletePrayerSchedule(
+        latitude: Double,
+        longitude: Double,
+        year: Int,
+        month: Int,
+        day: Int,
+        timezoneOffsetHours: Double,
+        config: CalculationConfig = defaultConfig
+    ): Map<String, Any?> {
+        logI("========================================")
+        logI("CALCULATING COMPLETE PRAYER SCHEDULE")
+        logI("========================================")
+
+        // Get base prayer times
+        val prayerTimesRaw = calculatePrayerTimes(
+            latitude = latitude,
+            longitude = longitude,
+            year = year,
+            month = month,
+            day = day,
+            timezoneOffsetHours = timezoneOffsetHours,
+            config = config
+        )
+
+        // Calculate sunrise and sunset
+        val (sunriseHours, sunsetHours) = calculateSunriseSunset(
+            latitude, longitude, year, month, day, timezoneOffsetHours, config
+        )
+
+        // Get current time for determining active ranges
+        val calendar = Calendar.getInstance(TimeZone.getDefault())
+        val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val currentMinute = calendar.get(Calendar.MINUTE)
+
+        logI("Current time for range calculation: $currentHour:$currentMinute")
+
+        // Calculate prayer time ranges
+        val prayerRanges = calculatePrayerTimeRanges(
+            prayerTimesRaw = prayerTimesRaw,
+            sunriseHours = sunriseHours,
+            sunsetHours = sunsetHours,
+            currentHour = currentHour,
+            currentMinute = currentMinute,
+            timezoneOffsetHours = timezoneOffsetHours
+        )
+
+        // Calculate forbidden times
+        val dhuhrHours = prayerTimesRaw[PrayerType.DHUHR] ?: (sunriseHours + 6.0)
+        val forbiddenTimes = calculateForbiddenTimes(
+            sunriseHours = sunriseHours,
+            sunsetHours = sunsetHours,
+            dhuhrHours = dhuhrHours,
+            currentHour = currentHour,
+            currentMinute = currentMinute
+        )
+
+        // Calculate Islamic midnight
+        val fajrHours = prayerTimesRaw[PrayerType.FAJR] ?: sunriseHours
+        val midnightHours = calculateIslamicMidnight(sunsetHours, fajrHours, timezoneOffsetHours)
+
+        // Find currently active prayer range
+        val currentRange = prayerRanges.values.find { it.isCurrentlyActive }
+
+        // Find next forbidden time
+        val nextForbidden = findNextForbiddenTime(forbiddenTimes, currentHour, currentMinute)
+
+        logI("Current active range: ${currentRange?.prayerType?.displayName ?: "None"}")
+        logI("Next forbidden: ${nextForbidden?.type?.displayName ?: "None"}")
+        logI("========================================")
+        logI("COMPLETE SCHEDULE CALCULATION FINISHED")
+        logI("========================================")
+        logI("")
+
+        return mapOf(
+            "prayerTimesRaw" to prayerTimesRaw,
+            "prayerRanges" to prayerRanges,
+            "forbiddenTimes" to forbiddenTimes,
+            "sunriseTime" to formatTime(sunriseHours),
+            "sunsetTime" to formatTime(sunsetHours),
+            "midnightTime" to formatTime(midnightHours),
+            "currentRange" to currentRange,
+            "nextForbidden" to nextForbidden
+        )
+    }
+
+    /**
+     * Calculate sunrise and sunset times.
+     */
+    private fun calculateSunriseSunset(
+        latitude: Double,
+        longitude: Double,
+        year: Int,
+        month: Int,
+        day: Int,
+        timezoneOffsetHours: Double,
+        config: CalculationConfig
+    ): Pair<Double, Double> {
+        logD("Calculating sunrise/sunset for $year-$month-$day")
+
+        val julianDate = julianDay(year, month, day, 0.0)
+        val julianDatePrev = julianDate - 1.0
+        val julianDateNext = julianDate + 1.0
+
+        val solarPrev = calculateSolarCoordinates(julianDatePrev)
+        val solar = calculateSolarCoordinates(julianDate)
+        val solarNext = calculateSolarCoordinates(julianDateNext)
+
+        val approximateTrans = approximateTransit(longitude, solar.apparentSiderealTime, solar.rightAscension)
+
+        // Standard sunrise altitude (includes refraction)
+        val solarAltitude = -50.0 / 60.0  // -0.833 degrees
+        val elevationCorrection = if (config.elevationMeters > 0) {
+            -0.0347 * kotlin.math.sqrt(config.elevationMeters)
+        } else 0.0
+        val h0 = solarAltitude + elevationCorrection
+
+        val sunriseTransit = correctedHourAngle(
+            m0 = approximateTrans,
+            h0 = h0,
+            latitude = latitude,
+            longitude = longitude,
+            afterTransit = false,
+            siderealTime = solar.apparentSiderealTime,
+            rightAscension = solar.rightAscension,
+            prevRightAscension = solarPrev.rightAscension,
+            nextRightAscension = solarNext.rightAscension,
+            declination = solar.declination,
+            prevDeclination = solarPrev.declination,
+            nextDeclination = solarNext.declination
+        )
+
+        val sunsetTransit = correctedHourAngle(
+            m0 = approximateTrans,
+            h0 = h0,
+            latitude = latitude,
+            longitude = longitude,
+            afterTransit = true,
+            siderealTime = solar.apparentSiderealTime,
+            rightAscension = solar.rightAscension,
+            prevRightAscension = solarPrev.rightAscension,
+            nextRightAscension = solarNext.rightAscension,
+            declination = solar.declination,
+            prevDeclination = solarPrev.declination,
+            nextDeclination = solarNext.declination
+        )
+
+        val sunriseHours = sunriseTransit + timezoneOffsetHours
+        val sunsetHours = sunsetTransit + timezoneOffsetHours
+
+        logD("Sunrise: ${formatTime(sunriseHours)}, Sunset: ${formatTime(sunsetHours)}")
+
+        return Pair(sunriseHours, sunsetHours)
+    }
+
+    /**
+     * Find the next upcoming forbidden time.
+     */
+    private fun findNextForbiddenTime(
+        forbiddenTimes: List<ForbiddenTime>,
+        currentHour: Int,
+        currentMinute: Int
+    ): ForbiddenTime? {
+        val currentMinutes = currentHour * 60 + currentMinute
+
+        return forbiddenTimes
+            .filter { !it.isCurrentlyActive }
+            .mapNotNull { forbidden ->
+                val startMinutes = (forbidden.startTimeHours * 60).toInt()
+                // Handle times that might be after midnight
+                val adjustedStart = if (startMinutes < currentMinutes) {
+                    startMinutes + 24 * 60
+                } else {
+                    startMinutes
+                }
+                forbidden to adjustedStart
+            }
+            .minByOrNull { it.second }
+            ?.first
+    }
+
+    // ==================== COMPLETE SCHEDULE SUSPEND FUNCTION ====================
+
+    /**
+     * Suspend function to get complete prayer schedule with location.
+     *
+     * References for Islamic prayer time calculations:
+     * - Islam 365: When to Pray - Understanding the Five Daily Prayer Times
+     * - Islam Question & Answer: What Are the Times of the Five Daily Prayers?
+     * - Hijri Guide: How to Calculate Prayer Times: Detailed Explanation
+     * - Fiqh Islamonline: Times of the Five Daily Prayers
+     *
+     * @param context Android context for location access
+     * @param config Calculation configuration
+     * @return CompleteScheduleResult with prayer schedule or error
+     */
+    @RequiresPermission(
+        anyOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ]
+    )
+    suspend fun getCompletePrayerSchedule(
+        context: Context,
+        config: CalculationConfig = defaultConfig
+    ): CompleteScheduleResult {
+        logI("getCompletePrayerSchedule() called")
+        logI("Attempting to acquire location for complete prayer schedule...")
+
+        return try {
+            // Check permissions
+            if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+            ) {
+                logW("Location permission denied for complete schedule")
+                return CompleteScheduleResult.PermissionDenied
+            }
+
+            // Acquire location
+            val location = acquireLocation(context)
+                ?: return CompleteScheduleResult.LocationUnavailable.also {
+                    logW("Location unavailable for complete schedule")
+                }
+
+            logI("Location acquired for complete schedule: ${location.latitude}, ${location.longitude}")
+
+            // Get date and timezone
+            val calendar = Calendar.getInstance(TimeZone.getDefault())
+            val year = calendar.get(Calendar.YEAR)
+            val month = calendar.get(Calendar.MONTH) + 1
+            val day = calendar.get(Calendar.DAY_OF_MONTH)
+            val timezoneOffset = calendar.timeZone.getOffset(calendar.timeInMillis) / 3_600_000.0
+
+            logI("Date for complete schedule: $year-$month-$day")
+            logI("Timezone offset: $timezoneOffset hours")
+
+            // Calculate complete schedule
+            val result = calculateCompletePrayerSchedule(
+                latitude = location.latitude,
+                longitude = location.longitude,
+                year = year,
+                month = month,
+                day = day,
+                timezoneOffsetHours = timezoneOffset,
+                config = config
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val prayerTimesRaw = result["prayerTimesRaw"] as Map<PrayerType, Double>
+            @Suppress("UNCHECKED_CAST")
+            val prayerRanges = result["prayerRanges"] as Map<PrayerType, PrayerTimeRange>
+            val forbiddenTimes = result["forbiddenTimes"] as List<ForbiddenTime>
+            val sunriseTime = result["sunriseTime"] as String
+            val sunsetTime = result["sunsetTime"] as String
+            val midnightTime = result["midnightTime"] as String
+            val currentRange = result["currentRange"] as PrayerTimeRange?
+            val nextForbidden = result["nextForbidden"] as ForbiddenTime?
+
+            val schedule = CompletePrayerSchedule(
+                prayerRanges = prayerRanges,
+                forbiddenTimes = forbiddenTimes,
+                sunriseTime = sunriseTime,
+                sunsetTime = sunsetTime,
+                midnightTime = midnightTime,
+                currentTimeRange = currentRange,
+                nextForbiddenTime = nextForbidden
+            )
+
+            logI("Complete prayer schedule calculated successfully")
+            logI("Prayer ranges: ${prayerRanges.size}")
+            logI("Forbidden times: ${forbiddenTimes.size}")
+            logI("Current range: ${currentRange?.prayerType?.displayName ?: "None"}")
+            logI("Next forbidden: ${nextForbidden?.type?.displayName ?: "None"}")
+
+            CompleteScheduleResult.Success(schedule)
+        } catch (e: SecurityException) {
+            logE("Security exception getting complete schedule: ${e.message}", e)
+            CompleteScheduleResult.PermissionDenied
+        } catch (e: Exception) {
+            logE("Unexpected error getting complete schedule: ${e.message}", e)
+            CompleteScheduleResult.Error(e)
+        }
     }
 }
