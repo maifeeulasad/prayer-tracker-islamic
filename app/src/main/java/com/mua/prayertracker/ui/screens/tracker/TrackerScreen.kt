@@ -35,8 +35,12 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.accompanist.permissions.shouldShowRationale
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mua.prayertracker.domain.model.ForbiddenTime
+import com.mua.prayertracker.domain.model.ForbiddenTimeType
 import com.mua.prayertracker.domain.model.PrayerType
+import com.mua.prayertracker.ui.components.ForbiddenTimeCard
 import com.mua.prayertracker.ui.components.PrayerCard
+import com.mua.prayertracker.ui.components.SectionHeader
 import com.mua.prayertracker.ui.theme.GoldenAccent
 import com.mua.prayertracker.ui.theme.IslamicGreen
 import com.mua.prayertracker.ui.viewmodel.PrayerTrackerViewModel
@@ -56,6 +60,8 @@ fun TrackerScreen(
     val prayers by viewModel.prayers.collectAsState()
     val currentRecord by viewModel.currentPrayerRecord.collectAsState()
     val nextPrayerInfo by viewModel.nextPrayerInfo.collectAsState()
+    val prayerRanges by viewModel.prayerRanges.collectAsState()
+    val forbiddenTimes by viewModel.forbiddenTimes.collectAsState()
 
     val locationPermissionsState = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -111,15 +117,78 @@ fun TrackerScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Daily Prayer Times Section
+            item {
+                SectionHeader(
+                    title = "Daily Prayer Times",
+                    subtitle = "Each prayer has a valid time window"
+                )
+            }
+
             items(prayers) { prayer ->
+                val prayerRange = prayerRanges[prayer.type]
+                val prayerTimeDisplay = prayerRange?.let {
+                    "${it.startTimeFormatted} ~ ${it.endTimeFormatted}"
+                } ?: prayer.time
+
                 PrayerCard(
                     prayerType = prayer.type,
-                    prayerTime = prayer.time,
+                    prayerTime = prayerTimeDisplay,
                     record = currentRecord,
                     onGroupToggle = { unitIds ->
                         viewModel.togglePrayerUnits(unitIds)
                     }
                 )
+            }
+
+            // Forbidden Times Section
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionHeader(
+                    title = "Forbidden Times (Makruh)",
+                    subtitle = "Prayer not allowed during these periods"
+                )
+            }
+
+            val forbiddenTimesToDisplay = if (forbiddenTimes.isNotEmpty()) {
+                forbiddenTimes
+            } else {
+                listOf(
+                    ForbiddenTime(
+                        type = ForbiddenTimeType.SUNRISE,
+                        startTimeFormatted = "--:--",
+                        endTimeFormatted = "--:--",
+                        startTimeHours = 0.0,
+                        endTimeHours = 0.0,
+                        durationMinutes = 0,
+                        description = "Forbidden during sunrise",
+                        isCurrentlyActive = false
+                    ),
+                    ForbiddenTime(
+                        type = ForbiddenTimeType.ZENITH,
+                        startTimeFormatted = "--:--",
+                        endTimeFormatted = "--:--",
+                        startTimeHours = 0.0,
+                        endTimeHours = 0.0,
+                        durationMinutes = 0,
+                        description = "Brief prohibition at solar noon",
+                        isCurrentlyActive = false
+                    ),
+                    ForbiddenTime(
+                        type = ForbiddenTimeType.SUNSET,
+                        startTimeFormatted = "--:--",
+                        endTimeFormatted = "--:--",
+                        startTimeHours = 0.0,
+                        endTimeHours = 0.0,
+                        durationMinutes = 0,
+                        description = "Forbidden during sunset",
+                        isCurrentlyActive = false
+                    )
+                )
+            }
+
+            items(forbiddenTimesToDisplay) { forbiddenTime ->
+                ForbiddenTimeCard(forbiddenTime = forbiddenTime)
             }
 
             // Bottom spacing
