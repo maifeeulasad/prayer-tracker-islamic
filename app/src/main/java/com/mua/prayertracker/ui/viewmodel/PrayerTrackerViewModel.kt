@@ -10,8 +10,10 @@ import com.mua.prayertracker.data.entity.PrayerRecordEntity
 import com.mua.prayertracker.domain.PrayerTimeProvider
 import com.mua.prayertracker.domain.model.CalendarDay
 import com.mua.prayertracker.domain.model.DayCompletionStatus
+import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.Prayer
 import com.mua.prayertracker.domain.model.PrayerCalculationSettings
+import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.repository.PrayerRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,6 +55,12 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private val _nextPrayerInfo = MutableStateFlow<Pair<PrayerType?, String>>(Pair(null, ""))
     val nextPrayerInfo: StateFlow<Pair<PrayerType?, String>> = _nextPrayerInfo.asStateFlow()
+
+    private val _prayerRanges = MutableStateFlow<Map<PrayerType, PrayerTimeRange>>(emptyMap())
+    val prayerRanges: StateFlow<Map<PrayerType, PrayerTimeRange>> = _prayerRanges.asStateFlow()
+
+    private val _forbiddenTimes = MutableStateFlow<List<ForbiddenTime>>(emptyList())
+    val forbiddenTimes: StateFlow<List<ForbiddenTime>> = _forbiddenTimes.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -278,6 +286,39 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
                 is PrayerTimeProvider.PrayerTimesResult.Success -> {
                     _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
                     updateNextPrayerInfo(result.times)
+
+                    when (
+                        val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
+                            context = getApplication(),
+                            config = _prayerSettings.value.toCalculationConfig()
+                        )
+                    ) {
+                        is PrayerTimeProvider.CompleteScheduleResult.Success -> {
+                            _prayerRanges.value = scheduleResult.schedule.prayerRanges
+                            _forbiddenTimes.value = scheduleResult.schedule.forbiddenTimes
+                        }
+
+                        PrayerTimeProvider.CompleteScheduleResult.PermissionDenied -> {
+                            _hasLocationPermission.value = false
+                            _prayerRanges.value = emptyMap()
+                            _forbiddenTimes.value = emptyList()
+                        }
+
+                        PrayerTimeProvider.CompleteScheduleResult.LocationUnavailable -> {
+                            _prayerRanges.value = emptyMap()
+                            _forbiddenTimes.value = emptyList()
+                        }
+
+                        is PrayerTimeProvider.CompleteScheduleResult.PolarAnomalyError -> {
+                            _prayerRanges.value = emptyMap()
+                            _forbiddenTimes.value = emptyList()
+                        }
+
+                        is PrayerTimeProvider.CompleteScheduleResult.Error -> {
+                            _prayerRanges.value = emptyMap()
+                            _forbiddenTimes.value = emptyList()
+                        }
+                    }
                 }
 
                 PrayerTimeProvider.PrayerTimesResult.PermissionDenied -> {
