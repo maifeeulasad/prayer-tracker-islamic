@@ -97,11 +97,12 @@ private fun BottomNavigationBar(
 
             NavigationBarItem(
                 selected = isSelected,
-                onClick = { onItemClick(index) },
+                onClick = { if (!screen.disabled) onItemClick(index) },
                 icon = {
                     Icon(
                         imageVector = if (isSelected) screen.selectedIcon else screen.unselectedIcon,
-                        contentDescription = screen.title
+                        contentDescription = screen.title,
+                        tint = if (screen.disabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                     )
                 },
                 label = {
