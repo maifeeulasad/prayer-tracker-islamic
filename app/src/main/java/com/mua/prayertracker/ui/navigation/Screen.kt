@@ -16,7 +16,8 @@ sealed class Screen(
     val route: String,
     val title: String,
     val selectedIcon: ImageVector,
-    val unselectedIcon: ImageVector
+    val unselectedIcon: ImageVector,
+    val disabled: Boolean = false,
 ) {
     data object Tracker : Screen(
         route = "tracker",
@@ -29,7 +30,8 @@ sealed class Screen(
         route = "calendar",
         title = "Calendar",
         selectedIcon = Icons.Filled.DateRange,
-        unselectedIcon = Icons.Outlined.DateRange
+        unselectedIcon = Icons.Outlined.DateRange,
+        disabled = true
     )
 
     data object Settings : Screen(
