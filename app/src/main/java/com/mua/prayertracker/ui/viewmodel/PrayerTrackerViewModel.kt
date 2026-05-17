@@ -1,7 +1,9 @@
 package com.mua.prayertracker.ui.viewmodel
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
+import androidx.annotation.RequiresPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mua.prayertracker.data.PrayerDatabase
@@ -16,6 +18,7 @@ import com.mua.prayertracker.domain.model.PrayerCalculationSettings
 import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.repository.PrayerRepository
+import com.mua.prayertracker.util.PrayerNotificationScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +33,8 @@ import java.util.Locale
  * ViewModel for managing prayer tracking state and logic.
  */
 class PrayerTrackerViewModel(application: Application) : AndroidViewModel(application) {
+    // Import notification scheduler
+    private val notificationScheduler = PrayerNotificationScheduler
 
     private val database = PrayerDatabase.getInstance(application)
     private val repository = PrayerRepository(database.prayerRecordDao())
@@ -73,6 +78,7 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     init {
         loadPrayersWithPlaceholderTimes()
+        @SuppressLint("MissingPermission")
         loadCurrentDayRecord()
         updateNextPrayerInfo()
         loadCalendarForMonth(_selectedMonth.value)
@@ -96,73 +102,90 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     /**
      * Load or create today's prayer record.
      */
+    @RequiresPermission(
+        anyOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ]
+    )
     private fun loadCurrentDayRecord() {
         viewModelScope.launch {
-            _currentPrayerRecord.value =
-                repository.getPrayerRecordByDate(_currentDate.value).first()
-                    ?: repository.createEmptyRecord(_currentDate.value)
-        }
-    }
+            viewModelScope.launch {
+                when (
+                    val result = PrayerTimeProvider.getPrayerTimes(
+                        context = getApplication(),
+                        config = _prayerSettings.value.toCalculationConfig()
+                    )
+                ) {
+                    is PrayerTimeProvider.PrayerTimesResult.Success -> {
+                        _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
+                        updateNextPrayerInfo(result.times)
 
-    /**
-     * Observe prayer record changes for the current date.
-     */
-    fun observeCurrentDayRecord() {
-        viewModelScope.launch {
-            repository.getPrayerRecordByDate(_currentDate.value).collect { record ->
-                _currentPrayerRecord.value =
-                    record ?: repository.createEmptyRecord(_currentDate.value)
+                        // Schedule notifications for today's prayers
+                        notificationScheduler.schedulePrayerNotifications(
+                            getApplication(),
+                            result.times
+                        )
+
+                        when (
+                            val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
+                                context = getApplication(),
+                                config = _prayerSettings.value.toCalculationConfig()
+                            )
+                        ) {
+                            is PrayerTimeProvider.CompleteScheduleResult.Success -> {
+                                _prayerRanges.value = scheduleResult.schedule.prayerRanges
+                                _forbiddenTimes.value = scheduleResult.schedule.forbiddenTimes
+                            }
+
+                            PrayerTimeProvider.CompleteScheduleResult.PermissionDenied -> {
+                                _hasLocationPermission.value = false
+                                _prayerRanges.value = emptyMap()
+                                _forbiddenTimes.value = emptyList()
+                            }
+
+                            PrayerTimeProvider.CompleteScheduleResult.LocationUnavailable -> {
+                                _prayerRanges.value = emptyMap()
+                                _forbiddenTimes.value = emptyList()
+                            }
+
+                            is PrayerTimeProvider.CompleteScheduleResult.PolarAnomalyError -> {
+                                _prayerRanges.value = emptyMap()
+                                _forbiddenTimes.value = emptyList()
+                            }
+
+                            is PrayerTimeProvider.CompleteScheduleResult.Error -> {
+                                _prayerRanges.value = emptyMap()
+                                _forbiddenTimes.value = emptyList()
+                            }
+                        }
+                    }
+
+                    PrayerTimeProvider.PrayerTimesResult.PermissionDenied -> {
+                        _hasLocationPermission.value = false
+                    }
+
+                    PrayerTimeProvider.PrayerTimesResult.LocationUnavailable -> {
+                        // No location, clear data
+                        _prayers.value = emptyList()
+                        _prayerRanges.value = emptyMap()
+                        _forbiddenTimes.value = emptyList()
+                    }
+
+                    is PrayerTimeProvider.PrayerTimesResult.PolarAnomalyError -> {
+                        _prayers.value = emptyList()
+                        _prayerRanges.value = emptyMap()
+                        _forbiddenTimes.value = emptyList()
+                    }
+
+                    is PrayerTimeProvider.PrayerTimesResult.Error -> {
+                        _prayers.value = emptyList()
+                        _prayerRanges.value = emptyMap()
+                        _forbiddenTimes.value = emptyList()
+                    }
+                }
             }
         }
-    }
-
-    /**
-     * Toggle a prayer unit's completion status.
-     */
-    fun togglePrayerUnit(unitId: String) {
-        viewModelScope.launch {
-            val currentRecord =
-                _currentPrayerRecord.value ?: repository.createEmptyRecord(_currentDate.value)
-            val updatedRecord = repository.togglePrayerUnit(currentRecord, unitId)
-            repository.savePrayerRecord(updatedRecord)
-            _currentPrayerRecord.value = updatedRecord
-
-            // Refresh calendar to show updated status
-            loadCalendarForMonth(_selectedMonth.value)
-        }
-    }
-
-    /**
-     * Toggle multiple prayer units at once (for grouped prayer toggles).
-     * This toggles all units in the provided list, effectively marking
-     * the entire group as completed or uncompleted.
-     */
-    fun togglePrayerUnits(unitIds: List<String>) {
-        viewModelScope.launch {
-            val currentRecord =
-                _currentPrayerRecord.value ?: repository.createEmptyRecord(_currentDate.value)
-            var updatedRecord = currentRecord
-
-            // Toggle each unit in the list
-            for (unitId in unitIds) {
-                updatedRecord = repository.togglePrayerUnit(updatedRecord, unitId)
-            }
-
-            repository.savePrayerRecord(updatedRecord)
-            _currentPrayerRecord.value = updatedRecord
-
-            // Refresh calendar to show updated status
-            loadCalendarForMonth(_selectedMonth.value)
-        }
-    }
-
-    /**
-     * Set the current date to track.
-     */
-    fun setCurrentDate(date: String) {
-        _currentDate.value = date
-        loadCurrentDayRecord()
-        observeCurrentDayRecord()
     }
 
     /**
@@ -257,7 +280,8 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
         val currentHour = now.get(Calendar.HOUR_OF_DAY)
         val currentMinute = now.get(Calendar.MINUTE)
 
-        val nextPrayer = PrayerTimeProvider.getNextPrayer(currentHour, currentMinute, prayerTimes)
+        val nextPrayer =
+            PrayerTimeProvider.getNextPrayer(currentHour, currentMinute, prayerTimes)
         val timeRemaining = PrayerTimeProvider.getTimeUntilNextPrayer(
             currentHour,
             currentMinute,
