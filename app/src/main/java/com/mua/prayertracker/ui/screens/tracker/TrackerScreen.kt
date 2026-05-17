@@ -136,7 +136,7 @@ fun TrackerScreen(
                     prayerTime = prayerTimeDisplay,
                     record = currentRecord,
                     onGroupToggle = { unitIds ->
-                        viewModel.togglePrayerUnits(unitIds)
+                        // viewModel.togglePrayerUnits(unitIds)
                     }
                 )
             }
