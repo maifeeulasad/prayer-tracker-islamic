@@ -61,7 +61,7 @@ fun CalendarScreen(
             onPreviousMonth = { viewModel.previousMonth() },
             onNextMonth = { viewModel.nextMonth() },
             onDayClick = { date ->
-                viewModel.setCurrentDate(date)
+                // viewModel.setCurrentDate(date)
                 onDaySelected(date)
             }
         )
