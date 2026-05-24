@@ -85,6 +85,14 @@ jobs:
       - name: Verify bundle signature
         run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
 
+      - name: Upload release build artifact (release only)
+        if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-release.aab
+          path: app/build/outputs/bundle/release/app-release.aab
+          retention-days: 1
+
       - name: Decode Play service account (release only)
         if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
         env:
