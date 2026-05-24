@@ -119,19 +119,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          log() {
+            printf '[publish] %s\n' "$*"
+          }
+
+          log "starting google play publish flow"
+
           AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
           SERVICE_ACCOUNT_FILE="secret/play-service-account.json"
 
+          log "checking bundle path: $AAB_PATH"
           if [ ! -f "$AAB_PATH" ]; then
             echo "AAB not found at $AAB_PATH"
             exit 1
           fi
 
+          log "checking service account file: $SERVICE_ACCOUNT_FILE"
           if [ ! -f "$SERVICE_ACCOUNT_FILE" ]; then
             echo "Service account file not found at $SERVICE_ACCOUNT_FILE"
             exit 1
           fi
 
+          log "building jwt assertion inputs"
           # Build and sign a JWT assertion for OAuth 2.0 service-account flow.
           python3 - <<'PY'
           import base64
@@ -166,46 +175,96 @@ jobs:
           )
           PY
 
+          log "signing jwt assertion with openssl"
           UNSIGNED_JWT="$(cat secret/unsigned-jwt.txt)"
           JWT_SIGNATURE="$(printf '%s' "$UNSIGNED_JWT" | openssl dgst -sha256 -sign secret/service-account-private-key.pem | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
           JWT_ASSERTION="$UNSIGNED_JWT.$JWT_SIGNATURE"
 
-          TOKEN_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          log "requesting oauth access token"
+          TOKEN_RESPONSE_FILE="secret/token-response.json"
+          TOKEN_STATUS_FILE="secret/token-status.txt"
+          curl -sS -X POST \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
             --data-urlencode "assertion=$JWT_ASSERTION" \
-            https://oauth2.googleapis.com/token)"
+            -o "$TOKEN_RESPONSE_FILE" \
+            -w '%{http_code}' \
+            https://oauth2.googleapis.com/token | tee "$TOKEN_STATUS_FILE"
 
-          ACCESS_TOKEN="$(printf '%s' "$TOKEN_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("access_token", ""))')"
+          TOKEN_HTTP_STATUS="$(cat "$TOKEN_STATUS_FILE")"
+          log "oauth token http status: $TOKEN_HTTP_STATUS"
+          log "oauth token response body: $(tr '\n' ' ' < "$TOKEN_RESPONSE_FILE")"
+
+          if [ "$TOKEN_HTTP_STATUS" != "200" ]; then
+            echo "Failed to obtain Google OAuth access token"
+            exit 1
+          fi
+
+          ACCESS_TOKEN="$(python3 -c 'import json,sys; print(json.loads(open("secret/token-response.json", encoding="utf-8").read()).get("access_token", ""))')"
           if [ -z "$ACCESS_TOKEN" ]; then
             echo "Failed to obtain Google OAuth access token"
             exit 1
           fi
 
-          CREATE_EDIT_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          log "oauth access token received"
+
+          log "creating play edit"
+          CREATE_EDIT_RESPONSE_FILE="secret/create-edit-response.json"
+          CREATE_EDIT_STATUS_FILE="secret/create-edit-status.txt"
+          curl -sS -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits")"
+            -o "$CREATE_EDIT_RESPONSE_FILE" \
+            -w '%{http_code}' \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits" | tee "$CREATE_EDIT_STATUS_FILE"
 
-          EDIT_ID="$(printf '%s' "$CREATE_EDIT_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("id", ""))')"
+          CREATE_EDIT_HTTP_STATUS="$(cat "$CREATE_EDIT_STATUS_FILE")"
+          log "create edit http status: $CREATE_EDIT_HTTP_STATUS"
+          log "create edit response body: $(tr '\n' ' ' < "$CREATE_EDIT_RESPONSE_FILE")"
+
+          if [ "$CREATE_EDIT_HTTP_STATUS" != "200" ]; then
+            echo "Failed to create Play edit"
+            exit 1
+          fi
+
+          EDIT_ID="$(python3 -c 'import json,sys; print(json.loads(open("secret/create-edit-response.json", encoding="utf-8").read()).get("id", ""))')"
           if [ -z "$EDIT_ID" ]; then
             echo "Failed to create Play edit"
             exit 1
           fi
 
-          UPLOAD_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          log "play edit id: $EDIT_ID"
+
+          log "uploading bundle to play edit"
+          UPLOAD_RESPONSE_FILE="secret/upload-response.json"
+          UPLOAD_STATUS_FILE="secret/upload-status.txt"
+          curl -sS -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/octet-stream" \
             --data-binary "@$AAB_PATH" \
-            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/bundles?uploadType=media")"
+            -o "$UPLOAD_RESPONSE_FILE" \
+            -w '%{http_code}' \
+            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/bundles?uploadType=media" | tee "$UPLOAD_STATUS_FILE"
 
-          VERSION_CODE="$(printf '%s' "$UPLOAD_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("versionCode", ""))')"
+          UPLOAD_HTTP_STATUS="$(cat "$UPLOAD_STATUS_FILE")"
+          log "upload bundle http status: $UPLOAD_HTTP_STATUS"
+          log "upload bundle response body: $(tr '\n' ' ' < "$UPLOAD_RESPONSE_FILE")"
+
+          if [ "$UPLOAD_HTTP_STATUS" != "200" ]; then
+            echo "Failed to upload bundle to Play edit"
+            exit 1
+          fi
+
+          VERSION_CODE="$(python3 -c 'import json,sys; print(json.loads(open("secret/upload-response.json", encoding="utf-8").read()).get("versionCode", ""))')"
           if [ -z "$VERSION_CODE" ]; then
             echo "Failed to upload bundle to Play edit"
             exit 1
           fi
+          log "uploaded bundle version code: $VERSION_CODE"
+
           export VERSION_CODE
 
+          log "building track payload"
           TRACK_PAYLOAD="$(python3 - <<'PY'
           import json
           import os
@@ -225,15 +284,50 @@ jobs:
           PY
           )"
 
-          curl -sS --fail-with-body -X PUT \
+          log "updating play track: $PLAY_TRACK"
+          TRACK_RESPONSE_FILE="secret/track-response.json"
+          TRACK_STATUS_FILE="secret/track-status.txt"
+          curl -sS -X PUT \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$TRACK_PAYLOAD" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/tracks/$PLAY_TRACK" >/dev/null
+            -o "$TRACK_RESPONSE_FILE" \
+            -w '%{http_code}' \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/tracks/$PLAY_TRACK" | tee "$TRACK_STATUS_FILE"
 
-          curl -sS --fail-with-body -X POST \
+          TRACK_HTTP_STATUS="$(cat "$TRACK_STATUS_FILE")"
+          log "track update http status: $TRACK_HTTP_STATUS"
+          log "track update response body: $(tr '\n' ' ' < "$TRACK_RESPONSE_FILE")"
+
+          if [ "$TRACK_HTTP_STATUS" != "200" ]; then
+            echo "Failed to update Play track"
+            exit 1
+          fi
+
+          log "committing play edit"
+          COMMIT_RESPONSE_FILE="secret/commit-response.json"
+          COMMIT_STATUS_FILE="secret/commit-status.txt"
+          curl -sS -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID:commit" >/dev/null
+            -o "$COMMIT_RESPONSE_FILE" \
+            -w '%{http_code}' \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID:commit" | tee "$COMMIT_STATUS_FILE"
+
+          COMMIT_HTTP_STATUS="$(cat "$COMMIT_STATUS_FILE")"
+          log "commit edit http status: $COMMIT_HTTP_STATUS"
+          log "commit edit response body: $(tr '\n' ' ' < "$COMMIT_RESPONSE_FILE")"
+
+          if [ "$COMMIT_HTTP_STATUS" != "200" ]; then
+            echo "Failed to commit Play edit"
+            exit 1
+          fi
+
+          log "google play publish flow completed successfully"
 
           # Best effort cleanup for generated credential material.
-          rm -f secret/unsigned-jwt.txt secret/service-account-private-key.pem secret/play-service-account.json
+          rm -f secret/unsigned-jwt.txt secret/service-account-private-key.pem secret/play-service-account.json \
+            secret/token-response.json secret/token-status.txt \
+            secret/create-edit-response.json secret/create-edit-status.txt \
+            secret/upload-response.json secret/upload-status.txt \
+            secret/track-response.json secret/track-status.txt \
+            secret/commit-response.json secret/commit-status.txt
