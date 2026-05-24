@@ -31,6 +31,42 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Validate required secrets
+        env:
+          PRAYER_TRACKER_JKS: ${{ secrets.PRAYER_TRACKER_JKS }}
+          PRAYER_TRACKER_KEY_ALIAS: ${{ secrets.PRAYER_TRACKER_KEY_ALIAS }}
+          PRAYER_TRACKER_KEY_PASSWORD: ${{ secrets.PRAYER_TRACKER_KEY_PASSWORD }}
+          PRAYER_TRACKER_STORE_PASSWORD: ${{ secrets.PRAYER_TRACKER_STORE_PASSWORD }}
+          PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+
+          required_secrets=(
+            PRAYER_TRACKER_JKS
+            PRAYER_TRACKER_KEY_ALIAS
+            PRAYER_TRACKER_KEY_PASSWORD
+            PRAYER_TRACKER_STORE_PASSWORD
+          )
+
+          missing=()
+          for secret_name in "${required_secrets[@]}"; do
+            if [ -z "${!secret_name:-}" ]; then
+              missing+=("$secret_name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "Missing required secrets: ${missing[*]}"
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.action }}" = "published" ]; then
+            if [ -z "${PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+              echo "Missing required secret for release publish: PRAYER_TRACKER_PLAY_SERVICE_ACCOUNT_JSON"
+              exit 1
+            fi
+          fi
+
       - name: Decode and save keystore
         run: |
           mkdir -p secret
