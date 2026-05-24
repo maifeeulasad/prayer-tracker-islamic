@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload release build artifact (release only)
         if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: app-release.aab
           path: app/build/outputs/bundle/release/app-release.aab
