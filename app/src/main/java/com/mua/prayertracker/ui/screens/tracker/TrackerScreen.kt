@@ -58,7 +58,7 @@ fun TrackerScreen(
     viewModel: PrayerTrackerViewModel = viewModel()
 ) {
     val prayers by viewModel.prayers.collectAsState()
-    val currentRecord by viewModel.currentPrayerRecord.collectAsState()
+    val completedUnits by viewModel.todayCompletedUnits.collectAsState()
     val nextPrayerInfo by viewModel.nextPrayerInfo.collectAsState()
     val prayerRanges by viewModel.prayerRanges.collectAsState()
     val forbiddenTimes by viewModel.forbiddenTimes.collectAsState()
@@ -134,9 +134,9 @@ fun TrackerScreen(
                 PrayerCard(
                     prayerType = prayer.type,
                     prayerTime = prayerTimeDisplay,
-                    record = currentRecord,
+                    completedUnits = completedUnits,
                     onGroupToggle = { unitIds ->
-                        // viewModel.togglePrayerUnits(unitIds)
+                        viewModel.togglePrayerUnits(unitIds)
                     }
                 )
             }
