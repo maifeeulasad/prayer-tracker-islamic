@@ -1,14 +1,11 @@
 package com.mua.prayertracker.ui.viewmodel
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
-import androidx.annotation.RequiresPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mua.prayertracker.data.PrayerDatabase
 import com.mua.prayertracker.data.PrayerSettingsStorage
-import com.mua.prayertracker.data.entity.PrayerRecordEntity
 import com.mua.prayertracker.domain.PrayerTimeProvider
 import com.mua.prayertracker.domain.model.CalendarDay
 import com.mua.prayertracker.domain.model.DayCompletionStatus
@@ -19,10 +16,12 @@ import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.repository.PrayerRepository
 import com.mua.prayertracker.util.PrayerNotificationScheduler
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -40,8 +39,9 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     private val repository = PrayerRepository(database.prayerRecordDao())
     private val settingsStorage = PrayerSettingsStorage(application)
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    private val monthFormat = SimpleDateFormat("yyyy-MM", Locale.getDefault())
+    // Locale.US keeps stored date keys in ASCII digits regardless of the device locale.
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val monthFormat = SimpleDateFormat("yyyy-MM", Locale.US)
 
     private val _currentDate = MutableStateFlow(getTodayDateString())
     val currentDate: StateFlow<String> = _currentDate.asStateFlow()
@@ -52,8 +52,8 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     private val _prayers = MutableStateFlow<List<Prayer>>(emptyList())
     val prayers: StateFlow<List<Prayer>> = _prayers.asStateFlow()
 
-    private val _currentPrayerRecord = MutableStateFlow<PrayerRecordEntity?>(null)
-    val currentPrayerRecord: StateFlow<PrayerRecordEntity?> = _currentPrayerRecord.asStateFlow()
+    private val _todayCompletedUnits = MutableStateFlow<Set<String>>(emptySet())
+    val todayCompletedUnits: StateFlow<Set<String>> = _todayCompletedUnits.asStateFlow()
 
     private val _calendarDays = MutableStateFlow<List<CalendarDay>>(emptyList())
     val calendarDays: StateFlow<List<CalendarDay>> = _calendarDays.asStateFlow()
@@ -78,10 +78,52 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     init {
         loadPrayersWithPlaceholderTimes()
-        @SuppressLint("MissingPermission")
-        loadCurrentDayRecord()
+        loadPrayerTimesFromLocation()
         updateNextPrayerInfo()
-        loadCalendarForMonth(_selectedMonth.value)
+        observeTodayCompletedUnits()
+        observeCalendar()
+    }
+
+    /**
+     * Keep today's completed units in sync with the database.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observeTodayCompletedUnits() {
+        viewModelScope.launch {
+            _currentDate
+                .flatMapLatest { date -> repository.observeCompletedUnits(date) }
+                .collect { completedUnits -> _todayCompletedUnits.value = completedUnits }
+        }
+    }
+
+    /**
+     * Keep the calendar in sync with the selected month and the database.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observeCalendar() {
+        viewModelScope.launch {
+            _selectedMonth
+                .flatMapLatest { month ->
+                    repository.observeMonthCompletions(month).map { month to it }
+                }
+                .collect { (month, completionsByDate) ->
+                    _calendarDays.value = buildCalendarDays(month, completionsByDate)
+                    _isLoading.value = false
+                }
+        }
+    }
+
+    /**
+     * Toggle a group of prayer units for today.
+     * If every unit in the group is completed, the group is cleared;
+     * otherwise all units in the group are marked completed.
+     */
+    fun togglePrayerUnits(unitIds: List<String>) {
+        viewModelScope.launch {
+            val completed = _todayCompletedUnits.value
+            val shouldComplete = !unitIds.all { it in completed }
+            repository.setUnitsCompleted(_currentDate.value, unitIds, shouldComplete)
+        }
     }
 
     /**
@@ -100,100 +142,11 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     }
 
     /**
-     * Load or create today's prayer record.
-     */
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ]
-    )
-    private fun loadCurrentDayRecord() {
-        viewModelScope.launch {
-            viewModelScope.launch {
-                when (
-                    val result = PrayerTimeProvider.getPrayerTimes(
-                        context = getApplication(),
-                        config = _prayerSettings.value.toCalculationConfig()
-                    )
-                ) {
-                    is PrayerTimeProvider.PrayerTimesResult.Success -> {
-                        _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
-                        updateNextPrayerInfo(result.times)
-
-                        // Schedule notifications for today's prayers
-                        notificationScheduler.schedulePrayerNotifications(
-                            getApplication(),
-                            result.times
-                        )
-
-                        when (
-                            val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
-                                context = getApplication(),
-                                config = _prayerSettings.value.toCalculationConfig()
-                            )
-                        ) {
-                            is PrayerTimeProvider.CompleteScheduleResult.Success -> {
-                                _prayerRanges.value = scheduleResult.schedule.prayerRanges
-                                _forbiddenTimes.value = scheduleResult.schedule.forbiddenTimes
-                            }
-
-                            PrayerTimeProvider.CompleteScheduleResult.PermissionDenied -> {
-                                _hasLocationPermission.value = false
-                                _prayerRanges.value = emptyMap()
-                                _forbiddenTimes.value = emptyList()
-                            }
-
-                            PrayerTimeProvider.CompleteScheduleResult.LocationUnavailable -> {
-                                _prayerRanges.value = emptyMap()
-                                _forbiddenTimes.value = emptyList()
-                            }
-
-                            is PrayerTimeProvider.CompleteScheduleResult.PolarAnomalyError -> {
-                                _prayerRanges.value = emptyMap()
-                                _forbiddenTimes.value = emptyList()
-                            }
-
-                            is PrayerTimeProvider.CompleteScheduleResult.Error -> {
-                                _prayerRanges.value = emptyMap()
-                                _forbiddenTimes.value = emptyList()
-                            }
-                        }
-                    }
-
-                    PrayerTimeProvider.PrayerTimesResult.PermissionDenied -> {
-                        _hasLocationPermission.value = false
-                    }
-
-                    PrayerTimeProvider.PrayerTimesResult.LocationUnavailable -> {
-                        // No location, clear data
-                        _prayers.value = emptyList()
-                        _prayerRanges.value = emptyMap()
-                        _forbiddenTimes.value = emptyList()
-                    }
-
-                    is PrayerTimeProvider.PrayerTimesResult.PolarAnomalyError -> {
-                        _prayers.value = emptyList()
-                        _prayerRanges.value = emptyMap()
-                        _forbiddenTimes.value = emptyList()
-                    }
-
-                    is PrayerTimeProvider.PrayerTimesResult.Error -> {
-                        _prayers.value = emptyList()
-                        _prayerRanges.value = emptyMap()
-                        _forbiddenTimes.value = emptyList()
-                    }
-                }
-            }
-        }
-    }
-
-    /**
      * Navigate to a specific month.
      */
     fun setMonth(yearMonth: String) {
+        _isLoading.value = true
         _selectedMonth.value = yearMonth
-        loadCalendarForMonth(yearMonth)
     }
 
     /**
@@ -217,55 +170,52 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     }
 
     /**
-     * Load calendar days for a specific month.
+     * Build calendar days for a month from its completions.
      */
-    private fun loadCalendarForMonth(yearMonth: String) {
-        viewModelScope.launch {
-            _isLoading.value = true
+    private fun buildCalendarDays(
+        yearMonth: String,
+        completionsByDate: Map<String, Set<String>>
+    ): List<CalendarDay> {
+        val cal = Calendar.getInstance()
+        cal.time = monthFormat.parse(yearMonth) ?: Date()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
 
-            val cal = Calendar.getInstance()
-            cal.time = monthFormat.parse(yearMonth + "-01") ?: Date()
-            cal.set(Calendar.DAY_OF_MONTH, 1)
+        val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) - 1
+        val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
-            val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) - 1
-            val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        val days = mutableListOf<CalendarDay>()
+        val today = getTodayDateString()
 
-            val days = mutableListOf<CalendarDay>()
-            val today = getTodayDateString()
-
-            // Add empty days for padding
-            repeat(firstDayOfWeek) {
-                days.add(
-                    CalendarDay(
-                        date = "",
-                        dayOfMonth = 0,
-                        isCurrentMonth = false,
-                        isToday = false,
-                        completionStatus = DayCompletionStatus.EMPTY
-                    )
+        // Add empty days for padding
+        repeat(firstDayOfWeek) {
+            days.add(
+                CalendarDay(
+                    date = "",
+                    dayOfMonth = 0,
+                    isCurrentMonth = false,
+                    isToday = false,
+                    completionStatus = DayCompletionStatus.EMPTY
                 )
-            }
-
-            // Add days of the month
-            for (day in 1..daysInMonth) {
-                val dateString = String.format(Locale.getDefault(), "%s-%02d", yearMonth, day)
-                val record = repository.getPrayerRecordByDate(dateString).first()
-                val completionStatus = repository.getDayCompletionStatus(record)
-
-                days.add(
-                    CalendarDay(
-                        date = dateString,
-                        dayOfMonth = day,
-                        isCurrentMonth = true,
-                        isToday = dateString == today,
-                        completionStatus = completionStatus
-                    )
-                )
-            }
-
-            _calendarDays.value = days
-            _isLoading.value = false
+            )
         }
+
+        // Add days of the month
+        for (day in 1..daysInMonth) {
+            val dateString = String.format(Locale.US, "%s-%02d", yearMonth, day)
+            val completedUnits = completionsByDate[dateString].orEmpty()
+
+            days.add(
+                CalendarDay(
+                    date = dateString,
+                    dayOfMonth = day,
+                    isCurrentMonth = true,
+                    isToday = dateString == today,
+                    completionStatus = repository.getDayCompletionStatus(completedUnits)
+                )
+            )
+        }
+
+        return days
     }
 
     /**
@@ -310,6 +260,12 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
                 is PrayerTimeProvider.PrayerTimesResult.Success -> {
                     _prayers.value = PrayerTimeProvider.getPrayersWithUnits(result.times)
                     updateNextPrayerInfo(result.times)
+
+                    // Schedule notifications for today's prayers
+                    notificationScheduler.schedulePrayerNotifications(
+                        getApplication(),
+                        result.times
+                    )
 
                     when (
                         val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
