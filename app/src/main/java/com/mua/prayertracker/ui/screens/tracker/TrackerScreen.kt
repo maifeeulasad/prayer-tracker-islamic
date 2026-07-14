@@ -6,17 +6,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +42,8 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.accompanist.permissions.shouldShowRationale
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mua.prayertracker.domain.location.ResolvedLocation
+import com.mua.prayertracker.domain.location.formatDistance
 import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.ForbiddenTimeType
 import com.mua.prayertracker.domain.model.PrayerType
@@ -62,6 +71,8 @@ fun TrackerScreen(
     val nextPrayerInfo by viewModel.nextPrayerInfo.collectAsState()
     val prayerRanges by viewModel.prayerRanges.collectAsState()
     val forbiddenTimes by viewModel.forbiddenTimes.collectAsState()
+    val resolvedLocation by viewModel.resolvedLocation.collectAsState()
+    val manualDistanceMeters by viewModel.manualDistanceMeters.collectAsState()
 
     val locationPermissionsState = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -108,7 +119,9 @@ fun TrackerScreen(
         TrackerHeader(
             date = dateFormat.format(Date()),
             nextPrayer = nextPrayerInfo.first,
-            timeRemaining = nextPrayerInfo.second
+            timeRemaining = nextPrayerInfo.second,
+            location = resolvedLocation,
+            distanceFromDeviceMeters = manualDistanceMeters
         )
 
         // Prayer list
@@ -242,12 +255,16 @@ private fun LocationPermissionCard(
 
 /**
  * Header section of the tracker screen.
+ * Shows the effective location (device or manually set) and, when the
+ * location was set manually, the distance from the current device position.
  */
 @Composable
 private fun TrackerHeader(
     date: String,
     nextPrayer: PrayerType?,
-    timeRemaining: String
+    timeRemaining: String,
+    location: ResolvedLocation?,
+    distanceFromDeviceMeters: Double?
 ) {
     Card(
         modifier = Modifier
@@ -283,6 +300,40 @@ private fun TrackerHeader(
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (location != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Location",
+                        tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "${location.point.formatted()} · ${if (location.isManual) "Manual" else "Device"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
+                    )
+                }
+
+                val distanceText = formatDistance(distanceFromDeviceMeters)
+                if (location.isManual && distanceText != null) {
+                    Text(
+                        text = "$distanceText from device location",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
+                    )
+                }
+            } else {
+                Text(
+                    text = "Location unavailable",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
                 )
             }
 
