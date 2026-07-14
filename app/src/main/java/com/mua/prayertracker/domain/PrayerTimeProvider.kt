@@ -1,6 +1,7 @@
 package com.mua.prayertracker.domain
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
@@ -13,6 +14,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.mua.prayertracker.domain.location.GeoPoint
 import com.mua.prayertracker.domain.model.CompletePrayerSchedule
 import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.ForbiddenTimeType
@@ -851,23 +853,32 @@ object PrayerTimeProvider {
     )
     suspend fun getPrayerTimes(
         context: Context,
-        config: CalculationConfig = defaultConfig
+        config: CalculationConfig = defaultConfig,
+        overrideLocation: GeoPoint? = null
     ): PrayerTimesResult {
         logI("getPrayerTimes() called")
 
         return try {
-            if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
-            ) {
-                logW("Location permission denied")
-                return PrayerTimesResult.PermissionDenied
-            }
-
-            logD("Location permission granted, acquiring location...")
-            val location = acquireLocation(context)
-                ?: return PrayerTimesResult.LocationUnavailable.also {
-                    logW("Location unavailable")
+            val location: GeoPoint
+            if (overrideLocation != null && overrideLocation.isValid) {
+                // A manually set location needs neither permission nor GPS.
+                logI("Using manually set location: ${overrideLocation.formatted()}")
+                location = overrideLocation
+            } else {
+                if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                    context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    logW("Location permission denied")
+                    return PrayerTimesResult.PermissionDenied
                 }
+
+                logD("Location permission granted, acquiring location...")
+                val deviceLocation = acquireLocation(context)
+                    ?: return PrayerTimesResult.LocationUnavailable.also {
+                        logW("Location unavailable")
+                    }
+                location = GeoPoint(deviceLocation.latitude, deviceLocation.longitude)
+            }
 
             logI("Location acquired: ${location.latitude}, ${location.longitude}")
 
@@ -910,6 +921,29 @@ object PrayerTimeProvider {
         } catch (e: Exception) {
             logE("Unexpected error: ${e.message}", e)
             PrayerTimesResult.Error(e)
+        }
+    }
+
+    /**
+     * Current device location, or null when permission is missing or the
+     * location cannot be acquired. Used to show the device position and its
+     * distance from a manually set location. Never throws.
+     */
+    @SuppressLint("MissingPermission")
+    suspend fun getDeviceLocation(context: Context): GeoPoint? {
+        return try {
+            if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+            ) {
+                null
+            } else {
+                acquireLocation(context)
+                    ?.let { GeoPoint(it.latitude, it.longitude) }
+                    ?.takeIf { it.isValid }
+            }
+        } catch (e: Exception) {
+            logW("Failed to get device location: ${e.message}")
+            null
         }
     }
 
@@ -1615,25 +1649,33 @@ object PrayerTimeProvider {
     )
     suspend fun getCompletePrayerSchedule(
         context: Context,
-        config: CalculationConfig = defaultConfig
+        config: CalculationConfig = defaultConfig,
+        overrideLocation: GeoPoint? = null
     ): CompleteScheduleResult {
         logI("getCompletePrayerSchedule() called")
-        logI("Attempting to acquire location for complete prayer schedule...")
 
         return try {
-            // Check permissions
-            if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
-            ) {
-                logW("Location permission denied for complete schedule")
-                return CompleteScheduleResult.PermissionDenied
-            }
-
-            // Acquire location
-            val location = acquireLocation(context)
-                ?: return CompleteScheduleResult.LocationUnavailable.also {
-                    logW("Location unavailable for complete schedule")
+            val location: GeoPoint
+            if (overrideLocation != null && overrideLocation.isValid) {
+                // A manually set location needs neither permission nor GPS.
+                logI("Using manually set location for complete schedule: ${overrideLocation.formatted()}")
+                location = overrideLocation
+            } else {
+                // Check permissions
+                if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                    context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    logW("Location permission denied for complete schedule")
+                    return CompleteScheduleResult.PermissionDenied
                 }
+
+                // Acquire location
+                val deviceLocation = acquireLocation(context)
+                    ?: return CompleteScheduleResult.LocationUnavailable.also {
+                        logW("Location unavailable for complete schedule")
+                    }
+                location = GeoPoint(deviceLocation.latitude, deviceLocation.longitude)
+            }
 
             logI("Location acquired for complete schedule: ${location.latitude}, ${location.longitude}")
 
