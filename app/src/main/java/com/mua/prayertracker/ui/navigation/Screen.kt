@@ -30,8 +30,7 @@ sealed class Screen(
         route = "calendar",
         title = "Calendar",
         selectedIcon = Icons.Filled.DateRange,
-        unselectedIcon = Icons.Outlined.DateRange,
-        disabled = true
+        unselectedIcon = Icons.Outlined.DateRange
     )
 
     data object Settings : Screen(
