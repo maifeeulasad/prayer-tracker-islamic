@@ -39,6 +39,8 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.pow
+import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.tan
 
@@ -363,12 +365,14 @@ object PrayerTimeProvider {
 
     /**
      * Get closest angle in range [-180, 180].
+     * Rounds to the nearest multiple of 360 (Astronomical Algorithms);
+     * truncation would leave values like 350 or -340 out of range.
      */
     private fun closestAngle(angle: Double): Double {
         return if (angle >= -180 && angle <= 180) {
             angle
         } else {
-            angle - 360.0 * (angle / 360.0).toInt()
+            angle - 360.0 * round(angle / 360.0)
         }
     }
 
@@ -615,26 +619,52 @@ object PrayerTimeProvider {
         }
 
         // =====================================================
+        // STEP 8.5: HIGH-LATITUDE FALLBACK
+        // =====================================================
+        // At high latitudes twilight may never reach the fajr/isha angle, which
+        // makes the hour-angle equation unsolvable (NaN). When sunrise/sunset
+        // still exist, substitute times derived from the high-latitude rule.
+        var resolvedFajr = fajrHours
+        var resolvedIsha = ishaHours
+        if ((resolvedFajr.isNaN() || resolvedIsha.isNaN()) &&
+            !sunriseHours.isNaN() && !sunsetHours.isNaN()
+        ) {
+            val rule = config.highLatitudeRule ?: HighLatitudeRule.MIDDLE_OF_NIGHT
+            val sunrise = normalizeHours(sunriseHours)
+            val sunset = normalizeHours(sunsetHours)
+            val nightHours = (sunrise - sunset + 24.0) % 24.0
+
+            val (fajrPortion, ishaPortion) = when (rule) {
+                HighLatitudeRule.MIDDLE_OF_NIGHT -> 0.5 to 0.5
+                HighLatitudeRule.SEVENTH_OF_NIGHT -> 1.0 / 7.0 to 1.0 / 7.0
+                HighLatitudeRule.TWILIGHT_ANGLE ->
+                    config.method.fajrAngle / 60.0 to config.method.ishaAngle / 60.0
+            }
+
+            if (resolvedFajr.isNaN()) {
+                resolvedFajr = sunrise - nightHours * fajrPortion
+                logW("Fajr unsolvable at latitude $latitude; using $rule fallback: ${formatTime(resolvedFajr)}")
+            }
+            if (resolvedIsha.isNaN()) {
+                resolvedIsha = sunset + nightHours * ishaPortion
+                logW("Isha unsolvable at latitude $latitude; using $rule fallback: ${formatTime(resolvedIsha)}")
+            }
+        }
+
+        // =====================================================
         // STEP 9: NORMALIZE AND APPLY OFFSETS
         // =====================================================
         logI("")
         logI("STEP 9: NORMALIZE AND APPLY OFFSETS")
         logI("----------------------------------------")
 
-        // Normalize to valid range [0, 24)
-        fun normalize(hours: Double): Double {
-            var h = hours % 24.0
-            if (h < 0) h += 24.0
-            return h
-        }
-
         val offsets = config.offsetsMinutes.mapValues { (_, minutes) -> minutes / 60.0 }
 
-        val finalFajr = normalize(fajrHours + (offsets[PrayerType.FAJR] ?: 0.0))
-        val finalDhuhr = normalize(dhuhrHours + (offsets[PrayerType.DHUHR] ?: 0.0))
-        val finalAsr = normalize(asrHours + (offsets[PrayerType.ASR] ?: 0.0))
-        val finalMaghrib = normalize(sunsetHours + (offsets[PrayerType.MAGHRIB] ?: 0.0))
-        val finalIsha = normalize(ishaHours + (offsets[PrayerType.ISHA] ?: 0.0))
+        val finalFajr = normalizeHours(resolvedFajr + (offsets[PrayerType.FAJR] ?: 0.0))
+        val finalDhuhr = normalizeHours(dhuhrHours + (offsets[PrayerType.DHUHR] ?: 0.0))
+        val finalAsr = normalizeHours(asrHours + (offsets[PrayerType.ASR] ?: 0.0))
+        val finalMaghrib = normalizeHours(sunsetHours + (offsets[PrayerType.MAGHRIB] ?: 0.0))
+        val finalIsha = normalizeHours(resolvedIsha + (offsets[PrayerType.ISHA] ?: 0.0))
 
         logI("Final Times:")
         logI("  Fajr: ${formatTime(finalFajr)}")
@@ -660,9 +690,19 @@ object PrayerTimeProvider {
     private fun toDegrees(radians: Double): Double = radians * 180.0 / PI
     private fun unwindAngle(angle: Double): Double = normalizeWithBound(angle, 360.0)
 
+    /** Normalize hours to [0, 24). NaN passes through so callers can detect it. */
+    private fun normalizeHours(hours: Double): Double {
+        if (hours.isNaN()) return hours
+        var h = hours % 24.0
+        if (h < 0) h += 24.0
+        return h
+    }
+
     fun formatTime(decimalHours: Double, format: String = "HH:mm"): String {
+        if (decimalHours.isNaN()) return "--:--"
         val normalized = ((decimalHours % 24.0) + 24.0) % 24.0
-        val totalMinutes = (normalized * 60.0).toInt()
+        // Round to the nearest minute instead of truncating (e.g. 5.9999h is 06:00, not 05:59)
+        val totalMinutes = (normalized * 60.0).roundToInt() % (24 * 60)
         val hour = (totalMinutes / 60) % 24
         val minute = totalMinutes % 60
 
@@ -851,6 +891,11 @@ object PrayerTimeProvider {
                 timezoneOffsetHours = timezoneOffset,
                 config = config
             )
+
+            if (rawTimes.values.any { it.isNaN() }) {
+                logW("Polar anomaly: unsolvable prayer times at latitude ${location.latitude}")
+                return PrayerTimesResult.PolarAnomalyError(location.latitude)
+            }
 
             val formatted = rawTimes.mapValues { (_, decimalHours) ->
                 formatTime(decimalHours, "HH:mm")
@@ -1209,10 +1254,19 @@ object PrayerTimeProvider {
         endHours: Double
     ): PreferredPortion {
         val startMinutes = (startHours * 60).toInt()
-        val endMinutes = (endHours * 60).toInt()
+        var endMinutes = (endHours * 60).toInt()
+        var current = currentMinutes
+
+        // A window ending "before" it starts crosses midnight (e.g. Isha → Islamic midnight)
+        if (endMinutes <= startMinutes) {
+            endMinutes += 24 * 60
+            if (current < startMinutes) current += 24 * 60
+        }
+
         val totalMinutes = endMinutes - startMinutes
-        val elapsedMinutes = currentMinutes - startMinutes
-        val progress = elapsedMinutes.toDouble() / totalMinutes.toDouble()
+        if (totalMinutes <= 0) return PreferredPortion.EARLY
+
+        val progress = (current - startMinutes).toDouble() / totalMinutes.toDouble()
 
         return when {
             progress < 0.33 -> PreferredPortion.EARLY
@@ -1502,8 +1556,10 @@ object PrayerTimeProvider {
             nextDeclination = solarNext.declination
         )
 
-        val sunriseHours = sunriseTransit + timezoneOffsetHours
-        val sunsetHours = sunsetTransit + timezoneOffsetHours
+        // Normalize to [0, 24): the UTC event can fall on an adjacent UTC day,
+        // and downstream range checks compare against a [0, 24h) clock.
+        val sunriseHours = normalizeHours(sunriseTransit + timezoneOffsetHours)
+        val sunsetHours = normalizeHours(sunsetTransit + timezoneOffsetHours)
 
         logD("Sunrise: ${formatTime(sunriseHours)}, Sunset: ${formatTime(sunsetHours)}")
 
@@ -1604,6 +1660,12 @@ object PrayerTimeProvider {
 
             @Suppress("UNCHECKED_CAST")
             val prayerTimesRaw = result["prayerTimesRaw"] as Map<PrayerType, Double>
+
+            if (prayerTimesRaw.values.any { it.isNaN() }) {
+                logW("Polar anomaly: unsolvable schedule at latitude ${location.latitude}")
+                return CompleteScheduleResult.PolarAnomalyError(location.latitude)
+            }
+
             @Suppress("UNCHECKED_CAST")
             val prayerRanges = result["prayerRanges"] as Map<PrayerType, PrayerTimeRange>
             val forbiddenTimes = result["forbiddenTimes"] as List<ForbiddenTime>
