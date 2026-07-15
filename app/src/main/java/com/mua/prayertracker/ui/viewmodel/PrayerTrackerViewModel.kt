@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -108,6 +109,17 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
             distanceBetweenMeters(manual, device)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    private val _selectedDay = MutableStateFlow<String?>(null)
+    val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
+
+    /** Completed units of the day selected in the calendar, kept in sync with the database. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val selectedDayCompletedUnits: StateFlow<Set<String>> = _selectedDay
+        .flatMapLatest { date ->
+            if (date == null) flowOf(emptySet()) else repository.observeCompletedUnits(date)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
     init {
         loadPrayersWithPlaceholderTimes()
         loadPrayerTimesFromLocation()
@@ -156,6 +168,22 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
             val shouldComplete = !unitIds.all { it in completed }
             repository.setUnitsCompleted(_currentDate.value, unitIds, shouldComplete)
         }
+    }
+
+    /**
+     * Select a calendar day to show its details.
+     */
+    fun selectDay(date: String) {
+        if (date.isNotBlank()) {
+            _selectedDay.value = date
+        }
+    }
+
+    /**
+     * Dismiss the selected day details.
+     */
+    fun clearSelectedDay() {
+        _selectedDay.value = null
     }
 
     /**
@@ -236,13 +264,24 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
             val dateString = String.format(Locale.US, "%s-%02d", yearMonth, day)
             val completedUnits = completionsByDate[dateString].orEmpty()
 
+            // A past day with nothing recorded is missed, not merely empty;
+            // today and future days stay empty until something is tracked.
+            // ISO date strings compare correctly as plain strings.
+            val baseStatus = repository.getDayCompletionStatus(completedUnits)
+            val completionStatus =
+                if (baseStatus == DayCompletionStatus.EMPTY && dateString < today) {
+                    DayCompletionStatus.MISSED
+                } else {
+                    baseStatus
+                }
+
             days.add(
                 CalendarDay(
                     date = dateString,
                     dayOfMonth = day,
                     isCurrentMonth = true,
                     isToday = dateString == today,
-                    completionStatus = repository.getDayCompletionStatus(completedUnits)
+                    completionStatus = completionStatus
                 )
             )
         }
