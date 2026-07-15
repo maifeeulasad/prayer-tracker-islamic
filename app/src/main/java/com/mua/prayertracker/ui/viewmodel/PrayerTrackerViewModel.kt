@@ -7,6 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.mua.prayertracker.data.PrayerDatabase
 import com.mua.prayertracker.data.PrayerSettingsStorage
 import com.mua.prayertracker.domain.PrayerTimeProvider
+import com.mua.prayertracker.domain.location.GeoPoint
+import com.mua.prayertracker.domain.location.ManualLocationStorage
+import com.mua.prayertracker.domain.location.ResolvedLocation
+import com.mua.prayertracker.domain.location.distanceBetweenMeters
+import com.mua.prayertracker.domain.location.resolveLocation
 import com.mua.prayertracker.domain.model.CalendarDay
 import com.mua.prayertracker.domain.model.DayCompletionStatus
 import com.mua.prayertracker.domain.model.ForbiddenTime
@@ -19,9 +24,12 @@ import com.mua.prayertracker.util.PrayerNotificationScheduler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -75,6 +83,30 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private val _prayerSettings = MutableStateFlow(settingsStorage.load())
     val prayerSettings: StateFlow<PrayerCalculationSettings> = _prayerSettings.asStateFlow()
+
+    private val manualLocationStorage = ManualLocationStorage(application)
+
+    private val _manualLocation = MutableStateFlow(manualLocationStorage.load())
+    val manualLocation: StateFlow<GeoPoint?> = _manualLocation.asStateFlow()
+
+    private val _deviceLocation = MutableStateFlow<GeoPoint?>(null)
+    val deviceLocation: StateFlow<GeoPoint?> = _deviceLocation.asStateFlow()
+
+    /** The location in effect (manual wins over device), tagged with its source. */
+    val resolvedLocation: StateFlow<ResolvedLocation?> =
+        combine(_manualLocation, _deviceLocation) { manual, device ->
+            resolveLocation(manual, device)
+        }.stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            resolveLocation(_manualLocation.value, null)
+        )
+
+    /** Distance between the manually set location and the device location, if both known. */
+    val manualDistanceMeters: StateFlow<Double?> =
+        combine(_manualLocation, _deviceLocation) { manual, device ->
+            distanceBetweenMeters(manual, device)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
         loadPrayersWithPlaceholderTimes()
@@ -251,10 +283,18 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     @SuppressLint("MissingPermission")
     fun loadPrayerTimesFromLocation() {
         viewModelScope.launch {
+            val manualLocation = _manualLocation.value
+
+            // Always refresh the device position so the UI can show it and the
+            // distance from a manually set location. Null when permission is
+            // missing or the device location is unavailable.
+            _deviceLocation.value = PrayerTimeProvider.getDeviceLocation(getApplication())
+
             when (
                 val result = PrayerTimeProvider.getPrayerTimes(
                     context = getApplication(),
-                    config = _prayerSettings.value.toCalculationConfig()
+                    config = _prayerSettings.value.toCalculationConfig(),
+                    overrideLocation = manualLocation
                 )
             ) {
                 is PrayerTimeProvider.PrayerTimesResult.Success -> {
@@ -270,7 +310,8 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
                     when (
                         val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
                             context = getApplication(),
-                            config = _prayerSettings.value.toCalculationConfig()
+                            config = _prayerSettings.value.toCalculationConfig(),
+                            overrideLocation = manualLocation
                         )
                     ) {
                         is PrayerTimeProvider.CompleteScheduleResult.Success -> {
@@ -327,6 +368,28 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    /**
+     * Set and persist a manual location from raw user input.
+     * @return false when the input is not a valid latitude/longitude pair;
+     *         nothing is changed in that case.
+     */
+    fun setManualLocation(latitudeText: String, longitudeText: String): Boolean {
+        val point = GeoPoint.parse(latitudeText, longitudeText) ?: return false
+        if (!manualLocationStorage.save(point)) return false
+        _manualLocation.value = point
+        loadPrayerTimesFromLocation()
+        return true
+    }
+
+    /**
+     * Remove the manual location and fall back to the device location.
+     */
+    fun clearManualLocation() {
+        manualLocationStorage.clear()
+        _manualLocation.value = null
+        loadPrayerTimesFromLocation()
+    }
+
     fun updateCalculationMethod(method: PrayerTimeProvider.CalculationMethod) {
         updatePrayerSettings { it.copy(method = method) }
     }
@@ -361,7 +424,8 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
         _prayerSettings.value = updated
         settingsStorage.save(updated)
 
-        if (_hasLocationPermission.value) {
+        // A manual location works without the location permission.
+        if (_hasLocationPermission.value || _manualLocation.value != null) {
             loadPrayerTimesFromLocation()
         }
     }
