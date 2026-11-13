@@ -6,6 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mua.prayertracker.data.PrayerSettingsStorage
 import com.mua.prayertracker.domain.PrayerTimeProvider
+import com.mua.prayertracker.domain.calculation.CalculationMethod
+import com.mua.prayertracker.domain.calculation.HighLatitudeRule
+import com.mua.prayertracker.domain.calculation.Madhab
 import com.mua.prayertracker.domain.location.GeoPoint
 import com.mua.prayertracker.domain.location.ManualLocationStorage
 import com.mua.prayertracker.domain.location.ResolvedLocation
@@ -330,7 +333,7 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
             when (
                 val result = PrayerTimeProvider.getPrayerTimes(
                     context = getApplication(),
-                    config = _prayerSettings.value.toCalculationConfig(),
+                    parameters = _prayerSettings.value.toCalculationParameters(),
                     overrideLocation = manualLocation
                 )
             ) {
@@ -347,7 +350,7 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
                     when (
                         val scheduleResult = PrayerTimeProvider.getCompletePrayerSchedule(
                             context = getApplication(),
-                            config = _prayerSettings.value.toCalculationConfig(),
+                            parameters = _prayerSettings.value.toCalculationParameters(),
                             overrideLocation = manualLocation
                         )
                     ) {
@@ -427,15 +430,15 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
         loadPrayerTimesFromLocation()
     }
 
-    fun updateCalculationMethod(method: PrayerTimeProvider.CalculationMethod) {
+    fun updateCalculationMethod(method: CalculationMethod) {
         updatePrayerSettings { it.copy(method = method) }
     }
 
-    fun updateMadhab(madhab: PrayerTimeProvider.Madhab) {
+    fun updateMadhab(madhab: Madhab) {
         updatePrayerSettings { it.copy(madhab = madhab) }
     }
 
-    fun updateHighLatitudeRule(rule: PrayerTimeProvider.HighLatitudeRule?) {
+    fun updateHighLatitudeRule(rule: HighLatitudeRule?) {
         updatePrayerSettings { it.copy(highLatitudeRule = rule) }
     }
 
