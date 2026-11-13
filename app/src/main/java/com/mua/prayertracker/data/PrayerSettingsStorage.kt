@@ -1,11 +1,15 @@
 package com.mua.prayertracker.data
 
 import android.content.Context
-import com.mua.prayertracker.domain.PrayerTimeProvider
+import com.mua.prayertracker.domain.calculation.CalculationMethod
+import com.mua.prayertracker.domain.calculation.HighLatitudeRule
+import com.mua.prayertracker.domain.calculation.Madhab
 import com.mua.prayertracker.domain.model.PrayerCalculationSettings
 
 /**
  * SharedPreferences storage for prayer calculation settings.
+ * Values are persisted by enum name, so the constant names in the
+ * calculation strategies must stay stable.
  */
 class PrayerSettingsStorage(context: Context) {
 
@@ -15,11 +19,11 @@ class PrayerSettingsStorage(context: Context) {
         return PrayerCalculationSettings(
             method = parseEnum(
                 preferences.getString(KEY_METHOD, null),
-                PrayerTimeProvider.CalculationMethod.KARACHI
+                CalculationMethod.KARACHI
             ),
             madhab = parseEnum(
                 preferences.getString(KEY_MADHAB, null),
-                PrayerTimeProvider.Madhab.HANAFI
+                Madhab.HANAFI
             ),
             highLatitudeRule = parseNullableEnum(
                 preferences.getString(KEY_HIGH_LATITUDE_RULE, null)
@@ -52,9 +56,9 @@ class PrayerSettingsStorage(context: Context) {
         return enumValues<T>().firstOrNull { it.name == value } ?: fallback
     }
 
-    private fun parseNullableEnum(value: String?): PrayerTimeProvider.HighLatitudeRule? {
+    private fun parseNullableEnum(value: String?): HighLatitudeRule? {
         if (value.isNullOrBlank()) return null
-        return enumValues<PrayerTimeProvider.HighLatitudeRule>().firstOrNull { it.name == value }
+        return enumValues<HighLatitudeRule>().firstOrNull { it.name == value }
     }
 
     private companion object {
