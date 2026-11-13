@@ -1,14 +1,19 @@
 package com.mua.prayertracker.domain.model
 
-import com.mua.prayertracker.domain.PrayerTimeProvider
+import com.mua.prayertracker.domain.calculation.CalculationMethod
+import com.mua.prayertracker.domain.calculation.CalculationParameters
+import com.mua.prayertracker.domain.calculation.HighLatitudeRule
+import com.mua.prayertracker.domain.calculation.Madhab
 
 /**
- * User-configurable parameters for prayer time calculation.
+ * User-configurable choices for prayer time calculation. Combines into
+ * [CalculationParameters] by taking the chosen authority's published base
+ * values and layering the user's own strategy choices on top.
  */
 data class PrayerCalculationSettings(
-    val method: PrayerTimeProvider.CalculationMethod = PrayerTimeProvider.CalculationMethod.KARACHI,
-    val madhab: PrayerTimeProvider.Madhab = PrayerTimeProvider.Madhab.HANAFI,
-    val highLatitudeRule: PrayerTimeProvider.HighLatitudeRule? = null,
+    val method: CalculationMethod = CalculationMethod.KARACHI,
+    val madhab: Madhab = Madhab.HANAFI,
+    val highLatitudeRule: HighLatitudeRule? = null,
     val elevationMeters: Double = 0.0,
     val fajrOffsetMinutes: Int = 0,
     val dhuhrOffsetMinutes: Int = 0,
@@ -16,9 +21,8 @@ data class PrayerCalculationSettings(
     val maghribOffsetMinutes: Int = 0,
     val ishaOffsetMinutes: Int = 0
 ) {
-    fun toCalculationConfig(): PrayerTimeProvider.CalculationConfig {
-        return PrayerTimeProvider.CalculationConfig(
-            method = method,
+    fun toCalculationParameters(): CalculationParameters {
+        return method.parameters().copy(
             madhab = madhab,
             highLatitudeRule = highLatitudeRule,
             elevationMeters = elevationMeters,
