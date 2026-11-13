@@ -19,7 +19,7 @@ android {
 
     defaultConfig {
         applicationId = "com.mua.prayertracker"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
         versionCode = 13
         versionName = "1.12"
