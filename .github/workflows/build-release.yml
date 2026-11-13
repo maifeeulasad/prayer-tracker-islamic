@@ -178,40 +178,64 @@ jobs:
           JWT_SIGNATURE="$(printf '%s' "$UNSIGNED_JWT" | openssl dgst -sha256 -sign secret/service-account-private-key.pem | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
           JWT_ASSERTION="$UNSIGNED_JWT.$JWT_SIGNATURE"
 
-          TOKEN_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          # Runs one Play-pipeline HTTP call, writing the body to a file.
+          # On failure it prints the HTTP status and the RESPONSE body so the
+          # log says which call Google rejected and why. Request credentials
+          # (JWT assertion, bearer token) are never echoed, and success
+          # bodies (which may carry the access token) are never printed.
+          play_call() {
+            local name="$1"; shift
+            local out="$1"; shift
+            local http
+            http="$(curl -sS -o "$out" -w "%{http_code}" "$@")" || true
+            echo "$name: HTTP $http"
+            case "$http" in
+              2*) ;;
+              *)
+                echo "::error::$name failed (HTTP $http); response body follows"
+                cat "$out"
+                echo
+                exit 1
+                ;;
+            esac
+          }
+
+          play_call "OAuth token exchange" secret/token-response.json -X POST \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
             --data-urlencode "assertion=$JWT_ASSERTION" \
-            https://oauth2.googleapis.com/token)"
+            https://oauth2.googleapis.com/token
 
-          ACCESS_TOKEN="$(printf '%s' "$TOKEN_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("access_token", ""))')"
+          ACCESS_TOKEN="$(python3 -c 'import json; print(json.load(open("secret/token-response.json")).get("access_token", ""))')"
           if [ -z "$ACCESS_TOKEN" ]; then
             echo "Failed to obtain Google OAuth access token"
             exit 1
           fi
 
-          CREATE_EDIT_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          play_call "Create Play edit" edit-response.json -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits")"
+            -d '' \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits"
 
-          EDIT_ID="$(printf '%s' "$CREATE_EDIT_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("id", ""))')"
+          EDIT_ID="$(python3 -c 'import json; print(json.load(open("edit-response.json")).get("id", ""))')"
           if [ -z "$EDIT_ID" ]; then
             echo "Failed to create Play edit"
             exit 1
           fi
 
-          UPLOAD_RESPONSE="$(curl -sS --fail-with-body -X POST \
+          play_call "Upload bundle" upload-response.json -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/octet-stream" \
             --data-binary "@$AAB_PATH" \
-            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/bundles?uploadType=media")"
+            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/bundles?uploadType=media"
 
-          VERSION_CODE="$(printf '%s' "$UPLOAD_RESPONSE" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("versionCode", ""))')"
+          VERSION_CODE="$(python3 -c 'import json; print(json.load(open("upload-response.json")).get("versionCode", ""))')"
           if [ -z "$VERSION_CODE" ]; then
             echo "Failed to upload bundle to Play edit"
             exit 1
           fi
+          echo "Uploaded bundle with version code $VERSION_CODE"
           export VERSION_CODE
 
           TRACK_PAYLOAD="$(python3 - <<'PY'
@@ -233,15 +257,18 @@ jobs:
           PY
           )"
 
-          curl -sS --fail-with-body -X PUT \
+          play_call "Assign $PLAY_TRACK track" track-response.json -X PUT \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$TRACK_PAYLOAD" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/tracks/$PLAY_TRACK" >/dev/null
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID/tracks/$PLAY_TRACK"
 
-          curl -sS --fail-with-body -X POST \
+          play_call "Commit Play edit" commit-response.json -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID:commit" >/dev/null
+            -d '' \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME/edits/$EDIT_ID:commit"
+
+          echo "Release published to the $PLAY_TRACK track"
 
           # Best effort cleanup for generated credential material.
-          rm -f secret/unsigned-jwt.txt secret/service-account-private-key.pem secret/play-service-account.json
+          rm -f secret/unsigned-jwt.txt secret/service-account-private-key.pem secret/play-service-account.json secret/token-response.json
