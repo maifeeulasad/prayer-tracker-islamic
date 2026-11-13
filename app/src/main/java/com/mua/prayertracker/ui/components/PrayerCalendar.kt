@@ -154,20 +154,20 @@ private fun CalendarDayCell(
         // Empty cell for padding
         Box(modifier = Modifier.aspectRatio(1f))
     } else {
-        val backgroundColor = when {
-            day.isToday -> IslamicGreen
-            day.completionStatus == DayCompletionStatus.COMPLETE -> IslamicGreen.copy(alpha = 0.8f)
-            day.completionStatus == DayCompletionStatus.PARTIAL -> GoldenAccent
-            day.completionStatus == DayCompletionStatus.MISSED -> ErrorRed
-            else -> Color.Transparent
+        // The background always reflects the completion status; today is
+        // marked with a border so its status stays visible.
+        val backgroundColor = when (day.completionStatus) {
+            DayCompletionStatus.COMPLETE -> IslamicGreen
+            DayCompletionStatus.PARTIAL -> GoldenAccent
+            DayCompletionStatus.MISSED -> ErrorRed
+            DayCompletionStatus.EMPTY -> Color.Transparent
         }
 
         val textColor = when {
-            day.isToday -> Color.White
             day.completionStatus == DayCompletionStatus.COMPLETE -> Color.White
-            day.completionStatus == DayCompletionStatus.PARTIAL -> Color.Black
             day.completionStatus == DayCompletionStatus.MISSED -> Color.White
-            !day.isCurrentMonth -> TextSecondary.copy(alpha = 0.5f)
+            day.completionStatus == DayCompletionStatus.PARTIAL -> Color.Black
+            day.isToday -> IslamicGreen
             else -> MaterialTheme.colorScheme.onSurface
         }
 

@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mua.prayertracker.ui.components.DayDetailsDialog
 import com.mua.prayertracker.ui.components.PrayerCalendar
 import com.mua.prayertracker.ui.theme.IslamicGreen
 import com.mua.prayertracker.ui.viewmodel.PrayerTrackerViewModel
@@ -22,14 +23,16 @@ import com.mua.prayertracker.ui.viewmodel.PrayerTrackerViewModel
 /**
  * Calendar screen showing monthly prayer history.
  * Displays a calendar view with color-coded days based on prayer completion.
+ * Tapping a day opens a modal with that day's prayer details.
  */
 @Composable
 fun CalendarScreen(
-    viewModel: PrayerTrackerViewModel = viewModel(),
-    onDaySelected: (String) -> Unit = {}
+    viewModel: PrayerTrackerViewModel = viewModel()
 ) {
     val calendarDays by viewModel.calendarDays.collectAsState()
     val selectedMonth by viewModel.selectedMonth.collectAsState()
+    val selectedDay by viewModel.selectedDay.collectAsState()
+    val selectedDayCompletedUnits by viewModel.selectedDayCompletedUnits.collectAsState()
 
     Column(
         modifier = Modifier
@@ -60,10 +63,15 @@ fun CalendarScreen(
             currentMonth = selectedMonth,
             onPreviousMonth = { viewModel.previousMonth() },
             onNextMonth = { viewModel.nextMonth() },
-            onDayClick = { date ->
-                // viewModel.setCurrentDate(date)
-                onDaySelected(date)
-            }
+            onDayClick = { date -> viewModel.selectDay(date) }
+        )
+    }
+
+    selectedDay?.let { date ->
+        DayDetailsDialog(
+            date = date,
+            completedUnits = selectedDayCompletedUnits,
+            onDismiss = { viewModel.clearSelectedDay() }
         )
     }
 }
