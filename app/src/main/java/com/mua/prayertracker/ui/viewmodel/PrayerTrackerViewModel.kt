@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.mua.prayertracker.data.PrayerDatabase
 import com.mua.prayertracker.data.PrayerSettingsStorage
 import com.mua.prayertracker.domain.PrayerTimeProvider
 import com.mua.prayertracker.domain.location.GeoPoint
@@ -44,8 +43,7 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
     // Import notification scheduler
     private val notificationScheduler = PrayerNotificationScheduler
 
-    private val database = PrayerDatabase.getInstance(application)
-    private val repository = PrayerRepository(database.prayerRecordDao())
+    private val repository = PrayerRepository(application)
     private val settingsStorage = PrayerSettingsStorage(application)
 
     // Locale.US keeps stored date keys in ASCII digits regardless of the device locale.
