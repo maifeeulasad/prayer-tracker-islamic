@@ -29,7 +29,11 @@ jobs:
           java-version: '17'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # Pushes to main write the dependency/build cache; release and PR
+          # runs reuse it read-only, so the release build starts warm.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Validate required secrets
         env:
@@ -72,9 +76,9 @@ jobs:
           mkdir -p secret
           echo "${{ secrets.PRAYER_TRACKER_JKS }}" | base64 -d > secret/key-store.jks
 
-      - name: Clean project
-        run: ./gradlew clean
-
+      # No `gradlew clean`: hosted runners start with an empty workspace, so
+      # cleaning only wasted a configuration round; the Gradle build cache
+      # (org.gradle.caching) reuses task outputs across runs instead.
       - name: Build release bundle
         run: |
           ./gradlew bundleRelease \
