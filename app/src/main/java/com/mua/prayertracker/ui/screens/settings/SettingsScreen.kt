@@ -32,7 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.mua.prayertracker.domain.PrayerTimeProvider
+import com.mua.prayertracker.domain.calculation.CalculationMethod
+import com.mua.prayertracker.domain.calculation.HighLatitudeRule
+import com.mua.prayertracker.domain.calculation.Madhab
 import com.mua.prayertracker.domain.location.distanceBetweenMeters
 import com.mua.prayertracker.domain.location.formatDistance
 import com.mua.prayertracker.domain.model.PrayerType
@@ -88,7 +90,7 @@ fun SettingsScreen(
 				viewModel.updateCalculationMethod(
 					previousEnumValue(
 						current = settings.method,
-						all = PrayerTimeProvider.CalculationMethod.entries
+						all = CalculationMethod.entries
 					)
 				)
 			},
@@ -96,7 +98,7 @@ fun SettingsScreen(
 				viewModel.updateCalculationMethod(
 					nextEnumValue(
 						current = settings.method,
-						all = PrayerTimeProvider.CalculationMethod.entries
+						all = CalculationMethod.entries
 					)
 				)
 			}
@@ -109,7 +111,7 @@ fun SettingsScreen(
 				viewModel.updateMadhab(
 					previousEnumValue(
 						current = settings.madhab,
-						all = PrayerTimeProvider.Madhab.entries
+						all = Madhab.entries
 					)
 				)
 			},
@@ -117,7 +119,7 @@ fun SettingsScreen(
 				viewModel.updateMadhab(
 					nextEnumValue(
 						current = settings.madhab,
-						all = PrayerTimeProvider.Madhab.entries
+						all = Madhab.entries
 					)
 				)
 			}
@@ -130,7 +132,7 @@ fun SettingsScreen(
 				viewModel.updateHighLatitudeRule(
 					previousNullableEnumValue(
 						current = settings.highLatitudeRule,
-						all = PrayerTimeProvider.HighLatitudeRule.entries
+						all = HighLatitudeRule.entries
 					)
 				)
 			},
@@ -138,7 +140,7 @@ fun SettingsScreen(
 				viewModel.updateHighLatitudeRule(
 					nextNullableEnumValue(
 						current = settings.highLatitudeRule,
-						all = PrayerTimeProvider.HighLatitudeRule.entries
+						all = HighLatitudeRule.entries
 					)
 				)
 			}
