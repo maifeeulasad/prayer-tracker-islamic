@@ -31,6 +31,7 @@ import com.mua.prayertracker.ui.navigation.Screen
 import com.mua.prayertracker.ui.navigation.bottomNavItems
 import com.mua.prayertracker.ui.screens.calendar.CalendarScreen
 import com.mua.prayertracker.ui.screens.settings.SettingsScreen
+import com.mua.prayertracker.ui.screens.tasbih.TasbihScreen
 import com.mua.prayertracker.ui.screens.tracker.TrackerScreen
 import com.mua.prayertracker.ui.theme.IslamicGreen
 import com.mua.prayertracker.ui.theme.PrayerTrackerIslamicTheme
@@ -85,7 +86,8 @@ fun MainScreen(
                 .padding(innerPadding)
         ) {
             when (bottomNavItems[selectedIndex].route) {
-                Screen.Tracker.route -> TrackerScreen(viewModel = viewModel)
+                Screen.Namaz.route -> TrackerScreen(viewModel = viewModel)
+                Screen.Tasbih.route -> TasbihScreen()
                 Screen.Calendar.route -> CalendarScreen(viewModel = viewModel)
                 Screen.Settings.route -> SettingsScreen(viewModel = viewModel)
             }
