@@ -15,12 +15,12 @@ android {
     }
 
     namespace = "com.mua.prayertracker"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.mua.prayertracker"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 14
         versionName = "1.13"
 

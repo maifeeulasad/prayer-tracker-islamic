@@ -1,5 +1,5 @@
 [versions]
-agp = "8.13.2"
+agp = "9.5.1"
 # minidb is compiled with Kotlin 2.2 metadata, so the app must build with 2.2+.
 kotlin = "2.2.10"
 coreKtx = "1.19.1"
