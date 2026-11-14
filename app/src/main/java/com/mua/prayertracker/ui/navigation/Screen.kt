@@ -1,11 +1,13 @@
 package com.mua.prayertracker.ui.navigation
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Adjust
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Mosque
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Adjust
 import androidx.compose.material.icons.outlined.DateRange
-import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -19,11 +21,18 @@ sealed class Screen(
     val unselectedIcon: ImageVector,
     val disabled: Boolean = false,
 ) {
-    data object Tracker : Screen(
-        route = "tracker",
-        title = "Tracker",
-        selectedIcon = Icons.Filled.Home,
-        unselectedIcon = Icons.Outlined.Home
+    data object Namaz : Screen(
+        route = "namaz",
+        title = "Namaz",
+        selectedIcon = Icons.Filled.Mosque,
+        unselectedIcon = Icons.Outlined.Mosque
+    )
+
+    data object Tasbih : Screen(
+        route = "tasbih",
+        title = "Tasbih",
+        selectedIcon = Icons.Filled.Adjust,
+        unselectedIcon = Icons.Outlined.Adjust
     )
 
     data object Calendar : Screen(
@@ -45,7 +54,8 @@ sealed class Screen(
  * List of all bottom navigation items.
  */
 val bottomNavItems = listOf(
-    Screen.Tracker,
+    Screen.Namaz,
+    Screen.Tasbih,
     Screen.Calendar,
     Screen.Settings,
 )
