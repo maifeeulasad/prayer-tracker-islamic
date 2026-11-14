@@ -1,21 +1,18 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# R8 / ProGuard rules for Prayer Tracker Islamic.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Compose, kotlinx-coroutines and Play Services ship their own consumer rules,
+# so most of what we need is already covered. Keep this file focused on what is
+# specific to this app.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve stack traces for crash reports with the obfuscation mapping file
+# that Play Console / sideloaders can symbolicate.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Entity classes serialized by minidb — keep names and fields so the on-disk
+# format is stable across R8 renames.
+-keep class com.mua.prayertracker.data.entity.** { *; }
+-keep class com.mua.prayertracker.domain.model.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# BroadcastReceivers referenced from the manifest.
+-keep class com.mua.prayertracker.util.PrayerNotificationReceiver { *; }
