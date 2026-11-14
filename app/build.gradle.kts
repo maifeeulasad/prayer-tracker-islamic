@@ -58,6 +58,11 @@ android {
 
     packaging {
         resources {
+            // NOTE: do NOT exclude /kotlin/** — kotlin-reflect loads the
+            // built-in class metadata (kotlin/*.kotlin_builtins) at runtime,
+            // and MiniDB uses reflection on entity constructors. Dropping
+            // that directory makes the app crash with
+            // "AssertionError: Built-in class kotlin.Any is not found".
             excludes += setOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
                 "/META-INF/DEPENDENCIES",
@@ -65,7 +70,6 @@ android {
                 "/META-INF/NOTICE*",
                 "/META-INF/*.kotlin_module",
                 "/META-INF/versions/9/previous-compilation-data.bin",
-                "/kotlin/**",
                 "/META-INF/*.version",
             )
         }
