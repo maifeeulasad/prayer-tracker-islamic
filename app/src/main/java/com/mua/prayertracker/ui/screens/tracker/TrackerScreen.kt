@@ -46,7 +46,7 @@ import com.mua.prayertracker.domain.location.ResolvedLocation
 import com.mua.prayertracker.domain.location.formatDistance
 import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.ForbiddenTimeType
-import com.mua.prayertracker.domain.model.PrayerType
+import com.mua.prayertracker.domain.model.PrayerStatusSnapshot
 import com.mua.prayertracker.ui.components.ForbiddenTimeCard
 import com.mua.prayertracker.ui.components.PrayerCard
 import com.mua.prayertracker.ui.components.SectionHeader
@@ -68,7 +68,7 @@ fun TrackerScreen(
 ) {
     val prayers by viewModel.prayers.collectAsState()
     val completedUnits by viewModel.todayCompletedUnits.collectAsState()
-    val nextPrayerInfo by viewModel.nextPrayerInfo.collectAsState()
+    val prayerStatus by viewModel.prayerStatus.collectAsState()
     val prayerRanges by viewModel.prayerRanges.collectAsState()
     val forbiddenTimes by viewModel.forbiddenTimes.collectAsState()
     val resolvedLocation by viewModel.resolvedLocation.collectAsState()
@@ -118,8 +118,7 @@ fun TrackerScreen(
         // Header with date
         TrackerHeader(
             date = dateFormat.format(Date()),
-            nextPrayer = nextPrayerInfo.first,
-            timeRemaining = nextPrayerInfo.second,
+            status = prayerStatus,
             location = resolvedLocation,
             distanceFromDeviceMeters = manualDistanceMeters
         )
@@ -261,8 +260,7 @@ private fun LocationPermissionCard(
 @Composable
 private fun TrackerHeader(
     date: String,
-    nextPrayer: PrayerType?,
-    timeRemaining: String,
+    status: PrayerStatusSnapshot,
     location: ResolvedLocation?,
     distanceFromDeviceMeters: Double?
 ) {
@@ -287,20 +285,46 @@ private fun TrackerHeader(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (nextPrayer != null) {
-                Text(
-                    text = "Next: ${nextPrayer.displayName} in $timeRemaining",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else {
-                Text(
-                    text = "All prayers completed for today!",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
+            val current = status.current
+            val next = status.next
+            when {
+                current != null && next != null -> {
+                    Text(
+                        text = "Now: ${current.displayName} · ${status.currentEndsIn ?: ""} left",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Text(
+                        text = "Next: ${next.displayName} in ${status.nextStartsIn ?: ""}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                    )
+                }
+                current != null -> {
+                    Text(
+                        text = "Now: ${current.displayName} · ${status.currentEndsIn ?: ""} left",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+                next != null -> {
+                    Text(
+                        text = "Next: ${next.displayName} in ${status.nextStartsIn ?: ""}",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "All prayers completed for today!",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
