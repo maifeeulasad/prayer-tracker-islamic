@@ -133,7 +133,11 @@ fun TrackerScreen(
             // Circular 24-hour schedule glimpse, on top of the list
             if (prayerRanges.isNotEmpty()) {
                 item {
-                    PrayerClockRing(ranges = prayerRanges, status = prayerStatus)
+                    PrayerClockRing(
+                        ranges = prayerRanges,
+                        status = prayerStatus,
+                        forbiddenTimes = forbiddenTimes,
+                    )
                 }
             }
 

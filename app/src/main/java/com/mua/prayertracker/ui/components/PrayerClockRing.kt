@@ -32,15 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.maifee.velvet.component.card.VelvetCard
+import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.PrayerStatusSnapshot
 import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
-import com.mua.prayertracker.ui.theme.FardColor
-import com.mua.prayertracker.ui.theme.GoldenAccent
+import com.mua.prayertracker.ui.theme.ErrorRed
 import com.mua.prayertracker.ui.theme.IslamicGreen
-import com.mua.prayertracker.ui.theme.NaflColor
-import com.mua.prayertracker.ui.theme.SunnatColor
-import com.mua.prayertracker.ui.theme.WitrColor
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -62,6 +59,7 @@ import kotlinx.coroutines.delay
 fun PrayerClockRing(
     ranges: Map<PrayerType, PrayerTimeRange>,
     status: PrayerStatusSnapshot,
+    forbiddenTimes: List<ForbiddenTime> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     var nowMinute by remember { mutableIntStateOf(currentMinuteOfDay()) }
@@ -105,7 +103,9 @@ fun PrayerClockRing(
                         style = Stroke(width = strokeDp),
                     )
 
-                    // Prayer arcs — explicit order so z-overlap is deterministic
+                    // Prayer arcs — bleed each sweep by a tiny amount so
+                    // adjacent windows (Dhuhr/Asr, Asr/Maghrib) don't show a
+                    // sub-pixel gap where their integer-minute edges meet.
                     PrayerType.entries.forEach { type ->
                         val range = ranges[type] ?: return@forEach
                         val (startDeg, sweepDeg) = arcForWindow(
@@ -115,7 +115,27 @@ fun PrayerClockRing(
                         drawArc(
                             color = colorFor(type),
                             startAngle = startDeg,
-                            sweepAngle = sweepDeg,
+                            sweepAngle = sweepDeg + 0.4f,
+                            useCenter = false,
+                            topLeft = topLeft,
+                            size = size,
+                            style = Stroke(width = strokeDp),
+                        )
+                    }
+
+                    // Forbidden-time marks — thin red arcs on top of whatever
+                    // prayer band they sit in (sunrise/zenith/sunset).
+                    forbiddenTimes.forEach { forbidden ->
+                        val (startDeg, sweepDeg) = arcForWindow(
+                            startHours = forbidden.startTimeHours,
+                            endHours = forbidden.endTimeHours,
+                        )
+                        if (sweepDeg <= 0f) return@forEach
+                        drawArc(
+                            color = ErrorRed,
+                            startAngle = startDeg,
+                            // Give very short forbidden slots a visible minimum.
+                            sweepAngle = sweepDeg.coerceAtLeast(1.5f),
                             useCenter = false,
                             topLeft = topLeft,
                             size = size,
@@ -148,6 +168,12 @@ fun PrayerClockRing(
 
             Spacer(Modifier.height(12.dp))
             Legend(ranges = ranges)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Grey = no prayer window · red = forbidden",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -240,12 +266,22 @@ private fun arcForWindow(startHours: Double, endHours: Double): Pair<Float, Floa
     return minuteToDegrees(startMin) to sweep
 }
 
+/**
+ * Five distinct hues walking the day's temperature, so each waqt is
+ * immediately distinguishable on the ring.
+ *
+ * - Fajr: indigo — pre-dawn
+ * - Dhuhr: islamic green — high noon
+ * - Asr: gold — mid-afternoon
+ * - Maghrib: burnt orange — sunset (distinct from Asr's gold)
+ * - Isha: teal — night
+ */
 private fun colorFor(type: PrayerType): Color = when (type) {
-    PrayerType.FAJR -> SunnatColor      // Purple-ish: pre-dawn
-    PrayerType.DHUHR -> FardColor       // Islamic green: midday
-    PrayerType.ASR -> GoldenAccent      // Gold: afternoon
-    PrayerType.MAGHRIB -> WitrColor     // Warm accent: sunset
-    PrayerType.ISHA -> NaflColor        // Teal: night
+    PrayerType.FAJR -> Color(0xFF7B68EE)       // Indigo
+    PrayerType.DHUHR -> Color(0xFF1E5945)      // Islamic green
+    PrayerType.ASR -> Color(0xFFC5A059)        // Gold
+    PrayerType.MAGHRIB -> Color(0xFFE07A3C)    // Burnt orange — clearly not gold
+    PrayerType.ISHA -> Color(0xFF4ECDC4)       // Teal
 }
 
 private fun currentMinuteOfDay(): Int {
