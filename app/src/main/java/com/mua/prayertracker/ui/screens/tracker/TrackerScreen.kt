@@ -49,6 +49,7 @@ import com.mua.prayertracker.domain.model.ForbiddenTimeType
 import com.mua.prayertracker.domain.model.PrayerStatusSnapshot
 import com.mua.prayertracker.ui.components.ForbiddenTimeCard
 import com.mua.prayertracker.ui.components.PrayerCard
+import com.mua.prayertracker.ui.components.PrayerClockRing
 import com.mua.prayertracker.ui.components.SectionHeader
 import com.mua.prayertracker.ui.theme.GoldenAccent
 import com.mua.prayertracker.ui.theme.IslamicGreen
@@ -129,6 +130,13 @@ fun TrackerScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Circular 24-hour schedule glimpse, on top of the list
+            if (prayerRanges.isNotEmpty()) {
+                item {
+                    PrayerClockRing(ranges = prayerRanges, status = prayerStatus)
+                }
+            }
+
             // Daily Prayer Times Section
             item {
                 SectionHeader(
