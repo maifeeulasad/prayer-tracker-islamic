@@ -129,6 +129,28 @@ enum class PreferredPortion {
 }
 
 /**
+ * Snapshot of what matters "right now" for the tracker header.
+ *
+ * @property current the prayer whose validity window currently contains the
+ *   clock; `null` outside every window.
+ * @property currentEndsIn human-readable countdown to the end of the current
+ *   window (e.g. "1h 23m"); `null` when [current] is `null`.
+ * @property next the next prayer to begin; `null` if there are no more today.
+ * @property nextStartsIn human-readable countdown to the start of [next]; `null`
+ *   when [next] is `null`.
+ */
+data class PrayerStatusSnapshot(
+    val current: PrayerType?,
+    val currentEndsIn: String?,
+    val next: PrayerType?,
+    val nextStartsIn: String?,
+) {
+    companion object {
+        val Empty = PrayerStatusSnapshot(null, null, null, null)
+    }
+}
+
+/**
  * Represents forbidden times when prayer (especially voluntary/nafl) is not allowed.
  * These are brief periods associated with sun worship practices.
  *

@@ -19,6 +19,7 @@ import com.mua.prayertracker.domain.model.DayCompletionStatus
 import com.mua.prayertracker.domain.model.ForbiddenTime
 import com.mua.prayertracker.domain.model.Prayer
 import com.mua.prayertracker.domain.model.PrayerCalculationSettings
+import com.mua.prayertracker.domain.model.PrayerStatusSnapshot
 import com.mua.prayertracker.domain.model.PrayerTimeRange
 import com.mua.prayertracker.domain.model.PrayerType
 import com.mua.prayertracker.domain.repository.PrayerRepository
@@ -28,8 +29,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -76,6 +79,27 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private val _forbiddenTimes = MutableStateFlow<List<ForbiddenTime>>(emptyList())
     val forbiddenTimes: StateFlow<List<ForbiddenTime>> = _forbiddenTimes.asStateFlow()
+
+    /**
+     * Wall-clock minute-of-day, re-emitting every 30 s. Drives the live
+     * countdowns in [prayerStatus] without a Compose-side timer.
+     */
+    private val clockTicker: StateFlow<Int> = flow {
+        while (true) {
+            val now = Calendar.getInstance()
+            emit(now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE))
+            delay(30_000L)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, currentMinuteOfDay())
+
+    /**
+     * Current prayer (the window we're inside) + the next one's countdown.
+     * Derived from [prayerRanges] and recomputed every 30 s via [clockTicker].
+     */
+    val prayerStatus: StateFlow<PrayerStatusSnapshot> =
+        combine(_prayerRanges, clockTicker) { ranges, nowMin ->
+            buildPrayerStatus(ranges, nowMin)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, PrayerStatusSnapshot.Empty)
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -482,5 +506,65 @@ class PrayerTrackerViewModel(application: Application) : AndroidViewModel(applic
 
     private fun getCurrentMonthString(): String {
         return monthFormat.format(Date())
+    }
+
+    private fun currentMinuteOfDay(): Int {
+        val now = Calendar.getInstance()
+        return now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+    }
+
+    /**
+     * Build the header snapshot from today's validity windows.
+     *
+     * `current` is the window containing [nowMin]; `next` is the earliest window
+     * starting after [nowMin], falling back to tomorrow's first prayer.
+     * Isha's window may cross midnight — it's picked up as "current" when now
+     * is past its start, and the end-countdown wraps the day accordingly.
+     */
+    private fun buildPrayerStatus(
+        ranges: Map<PrayerType, PrayerTimeRange>,
+        nowMin: Int,
+    ): PrayerStatusSnapshot {
+        if (ranges.isEmpty()) return PrayerStatusSnapshot.Empty
+
+        val current = ranges.values.firstOrNull { it.isCurrentlyActive }
+        val currentEndsIn = current?.let { range ->
+            val endMin = (range.endTimeHours * 60).toInt()
+            val diff = if (endMin > nowMin) endMin - nowMin else (24 * 60 - nowMin) + endMin
+            formatCountdown(diff)
+        }
+
+        val next = ranges.values
+            .asSequence()
+            .map { it to (it.startTimeHours * 60).toInt() }
+            .filter { (_, start) -> start > nowMin }
+            .minByOrNull { (_, start) -> start }
+            ?.first
+            ?: ranges[PrayerType.FAJR]
+
+        val nextStartsIn = next?.let { range ->
+            val startMin = (range.startTimeHours * 60).toInt()
+            val diff = if (startMin > nowMin) startMin - nowMin else (24 * 60 - nowMin) + startMin
+            formatCountdown(diff)
+        }
+
+        return PrayerStatusSnapshot(
+            current = current?.prayerType,
+            currentEndsIn = currentEndsIn,
+            next = next?.prayerType,
+            nextStartsIn = nextStartsIn,
+        )
+    }
+
+    private fun formatCountdown(minutes: Int): String {
+        val m = minutes.coerceAtLeast(0)
+        val h = m / 60
+        val rem = m % 60
+        return when {
+            h > 0 && rem > 0 -> "${h}h ${rem}m"
+            h > 0 -> "${h}h"
+            m > 0 -> "${m}m"
+            else -> "now"
+        }
     }
 }
